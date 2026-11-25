@@ -128,3 +128,46 @@ class SpotifyMatchingTests(unittest.TestCase):
             candidate["external_ids"] = {"isrc": "TEST00000001"}
         api = Mock(return_value={"tracks": {"items": candidates}})
         self.assertEqual(find_track(api, "Artist & Guest", "Song (Radio Edit)", ""), "single")
+
+    def test_recovery_handles_punctuation_verified_aliases_and_credit_formats(self):
+        cases = (
+            ("Trey Songz", "Missin You", "Missin' You", ("Trey Songz",)),
+            ("Lauryn Hill", "Doo Wop (That Thing)", "Doo Wop (That Thing)", ("Ms. Lauryn Hill",)),
+            ("Michael Brun & Roy English", "Tongue Tied July", "Tongue Tied July",
+             ("Michaël Brun", "Roy English")),
+            ("Olly Murs feat. Flo Rida", "Troublemaker", "Troublemaker (feat. Flo Rida)",
+             ("Olly Murs", "Flo Rida")),
+            ("Ruthie Foster", "Walk On (Album Version)", "Walk on", ("Ruthie Foster",)),
+        )
+        for artist, title, actual_title, credits in cases:
+            with self.subTest(title=title):
+                track = self.candidate("right", actual_title, *credits)
+                api = Mock(return_value={"tracks": {"items": [track]}})
+                self.assertEqual(find_track(api, artist, title, ""), "right")
+
+    def test_recovery_query_removes_bracketed_feature_but_requires_the_guest(self):
+        correct = self.candidate("right", "Song - Acoustic", "Artist", "Guest")
+        studio = self.candidate("studio", "Song", "Artist", "Guest")
+        uncredited = self.candidate("uncredited", "Song - Acoustic", "Artist")
+
+        def api(method, path, *, params):
+            if params["q"] == "track:Song (Acoustic) artist:Artist":
+                return {"tracks": {"items": [studio, uncredited, correct]}}
+            return {"tracks": {"items": []}}
+
+        self.assertEqual(find_track(api, "Artist", "Song (Acoustic) [feat. Guest]", ""), "right")
+
+    def test_recovery_rejects_multiple_recordings_and_wrong_versions(self):
+        candidates = [
+            self.candidate("first", "Missin' You", "Artist"),
+            self.candidate("second", "Missin’ You", "Artist"),
+        ]
+        api = Mock(return_value={"tracks": {"items": candidates}})
+        self.assertIsNone(find_track(api, "Artist", "Missin You", ""))
+        self.assertIsNone(find_track(api, "Artist", "Missin You (Acoustic)", ""))
+
+    def test_recovery_requires_credits_on_artist_annotations(self):
+        api = Mock(return_value={"tracks": {"items": [
+            self.candidate("wrong", "Song (with Someone Else)", "Artist"),
+        ]}})
+        self.assertIsNone(find_track(api, "Artist", "Song", ""))

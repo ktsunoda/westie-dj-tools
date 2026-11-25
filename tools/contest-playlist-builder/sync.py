@@ -95,12 +95,12 @@ class Sheets:
                             params={"fields": "sheets(properties(title))"})
         return {sheet["properties"]["title"] for sheet in data["sheets"]}
 
-    def read(self, spreadsheet, ranges):
+    def read(self, spreadsheet, ranges, *, render_option="UNFORMATTED_VALUE"):
         if not ranges:
             return []
         data = self.request(
             spreadsheet, "GET", "/values:batchGet", "Read Sheets values",
-            params={"ranges": ranges, "valueRenderOption": "UNFORMATTED_VALUE"},
+            params={"ranges": ranges, "valueRenderOption": render_option},
         )
         return [item.get("values", []) for item in data["valueRanges"]]
 
@@ -203,12 +203,24 @@ def source_lists(sheets, source):
             letters = chr(ord("A") + remainder) + letters
         ranges.append(f"'{year}'!A2:{letters}")
 
-    rows = (
-        (row[0], row[1] if len(row) > 1 else "", row[column])
-        for column, tab in zip(competition_columns, sheets.read(source, ranges))
-        for row in tab
-        if row and len(row) > column
-    )
+    rows = []
+    numeric_titles = []
+    for year, column, tab in zip(years, competition_columns, sheets.read(source, ranges)):
+        for index, row in enumerate(tab, 2):
+            if len(row) <= column:
+                continue
+            artist, title = (row + [""])[:2]
+            label = row[column]
+            if artist and isinstance(label, str) and label.strip() and type(title) in (int, float):
+                numeric_titles.append((len(rows), f"'{year}'!B{index}"))
+            rows.append((artist, title, label))
+    if numeric_titles:
+        displayed = sheets.read(source, [address for _, address in numeric_titles],
+                                render_option="FORMATTED_VALUE")
+        for (index, _), cells in zip(numeric_titles, displayed):
+            if cells and cells[0]:
+                artist, _, label = rows[index]
+                rows[index] = artist, cells[0][0], label
     return build_lists(rows)
 
 

@@ -51,6 +51,20 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(labels, ["Novice"])
         self.sheets.read.assert_called_with("source", ["'2025'!A2:K", "'2026'!A2:J"])
 
+    def test_source_uses_displayed_text_for_time_formatted_title(self):
+        self.sheets.tabs.return_value = {"2026"}
+        header = ["Artist", "Title", *[""] * 7, "Competition", "Spotify"]
+        self.sheets.read.side_effect = [
+            [[header]],
+            [[["Matt Wertz", 0.22152777777777777, *[""] * 7, "Novice"]]],
+            [[["5:19"]]],
+        ]
+        lists, _ = source_lists(self.sheets, "source")
+        self.assertEqual(lists["Novice"], [["Matt Wertz", "5:19"]])
+        self.sheets.read.assert_called_with(
+            "source", ["'2026'!B2"], render_option="FORMATTED_VALUE",
+        )
+
     def test_missing_competition_header_fails_before_output_writes(self):
         self.sheets.tabs.return_value = {"2026"}
         self.sheets.read.return_value = [[["Artist", "Title", "Spotify"]]]
