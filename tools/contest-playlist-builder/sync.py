@@ -1,5 +1,6 @@
 """Build Spotify contest playlists by division from DJ History."""
 import argparse
+import json
 import logging
 import os
 import re
@@ -9,12 +10,12 @@ from urllib.parse import quote
 from shared.spotify_matching import find_track
 
 DIVISIONS = {
-    "Newcomer": (("newcomer",), "368z3FaDCOu7jrTwDvjtYb"),
-    "Novice": (("novice",), "4XlIpjxq42vNYZnb5It6o5"),
-    "Intermediate": (("intermediate",), "7zRtirkcnkxCzIjRZrJY6K"),
-    "Advanced": (("advanced",), "5prtO5AZsIb9WYQtckWcjZ"),
-    "All Star": (("all-star", "all star", "all-stars"), "7se4zfEV063lW3UlSuIXMc"),
-    "Champions": (("champion", "champions", "champ"), "05IPigkqASSCOlytFcuOpJ"),
+    "Newcomer": ("newcomer",),
+    "Novice": ("novice",),
+    "Intermediate": ("intermediate",),
+    "Advanced": ("advanced",),
+    "All Star": ("all-star", "all star", "all-stars"),
+    "Champions": ("champion", "champions", "champ"),
 }
 STATE = "'Spotify Sync State'"
 FAILED = "'Failed Searches'"
@@ -22,6 +23,23 @@ FAILED = "'Failed Searches'"
 
 class SyncError(Exception):
     pass
+
+
+def load_playlist_ids(raw):
+    if not raw:
+        raise SyncError("Set SPOTIFY_PLAYLIST_IDS to a JSON object mapping divisions to playlist IDs.")
+    try:
+        playlists = json.loads(raw)
+    except ValueError:
+        raise SyncError("SPOTIFY_PLAYLIST_IDS must contain valid JSON.") from None
+    if not isinstance(playlists, dict) or playlists.keys() != DIVISIONS.keys():
+        raise SyncError("SPOTIFY_PLAYLIST_IDS must contain exactly the six division names.")
+    for division, playlist_id in playlists.items():
+        if not isinstance(playlist_id, str) or not re.fullmatch(r"[A-Za-z0-9]{22}", playlist_id):
+            raise SyncError(f"SPOTIFY_PLAYLIST_IDS has an invalid playlist ID for {division}.")
+    if len(set(playlists.values())) != len(DIVISIONS):
+        raise SyncError("SPOTIFY_PLAYLIST_IDS must use a different playlist for each division.")
+    return playlists
 
 
 def cell_text(value):
@@ -46,7 +64,7 @@ def build_lists(rows):
         if not artist or not title:
             continue
         key = f"{cell_text(artist)} – {cell_text(title)}"
-        for division, (keywords, _) in DIVISIONS.items():
+        for division, keywords in DIVISIONS.items():
             if key not in seen[division] and any(word in label.lower() for word in keywords):
                 seen[division].add(key)
                 lists[division].append([artist, title])
@@ -173,7 +191,9 @@ def source_lists(sheets, source):
     return build_lists(row for tab in sheets.read(source, ranges) for row in tab)
 
 
-def sync(sheets, spotify, source, output, *, check=False, summary=False):
+def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, summary=False):
+    if not (check or summary) and playlist_ids is None:
+        raise SyncError("Spotify playlist targets are required for sync.")
     lists, labels = source_lists(sheets, source)
     if summary:
         if labels:
@@ -219,7 +239,7 @@ def sync(sheets, spotify, source, output, *, check=False, summary=False):
             else:
                 failures.append([division, artist, title, datetime.now(timezone.utc).isoformat()])
         sheets.append_failures(output, failures)
-        spotify.add(DIVISIONS[division][1], tracks)
+        spotify.add(playlist_ids[division], tracks)
         sheets.write(output, {f"{STATE}!B{state_row}": [[len(rows) + 1]]})
         logging.info("%s: %d added, %d failed, saved row %d",
                      division, len(tracks), len(failures), len(rows) + 1)
@@ -238,13 +258,17 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
+        playlist_ids = None
+        if not (args.check or args.summary):
+            playlist_ids = load_playlist_ids(os.environ.get("SPOTIFY_PLAYLIST_IDS"))
         credentials = Credentials.from_service_account_file(
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"],
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         with AuthorizedSession(credentials) as google, requests.Session() as spotify:
             sync(Sheets(google), Spotify(spotify), os.environ["SOURCE_SHEET_ID"],
-                 os.environ["OUTPUT_SHEET_ID"], check=args.check, summary=args.summary)
+                 os.environ["OUTPUT_SHEET_ID"], playlist_ids=playlist_ids,
+                 check=args.check, summary=args.summary)
     except KeyError as error:
         logging.error("Missing configuration or API response field: %s", error.args[0])
         return 1
