@@ -54,13 +54,11 @@ def build_lists(rows):
     lists = {division: [] for division in DIVISIONS}
     seen = {division: set() for division in DIVISIONS}
     labels = set()
-    for row in rows:
-        if len(row) < 11 or not isinstance(row[10], str):
+    for artist, title, label in rows:
+        if not isinstance(label, str):
             continue
-        label = row[10]
         if label.strip():
             labels.add(label.strip())
-        artist, title = row[:2]
         if not artist or not title:
             continue
         key = f"{cell_text(artist)} – {cell_text(title)}"
@@ -187,8 +185,31 @@ def source_lists(sheets, source):
                    if re.fullmatch(r"[0-9]{4}", name) and int(name) >= 2012)
     if not years:
         raise SyncError("The source spreadsheet has no year tabs from 2012 onward.")
-    ranges = [f"'{year}'!A2:K" for year in years]
-    return build_lists(row for tab in sheets.read(source, ranges) for row in tab)
+    headers = sheets.read(source, [f"'{year}'!1:1" for year in years])
+    competition_columns = []
+    ranges = []
+    for year, header_rows in zip(years, headers):
+        header = header_rows[0] if header_rows else []
+        matches = [index for index, value in enumerate(header)
+                   if isinstance(value, str) and value.strip().casefold() == "competition"]
+        if len(matches) != 1:
+            raise SyncError(f"Year tab {year} must have exactly one Competition header.")
+        column = matches[0]
+        competition_columns.append(column)
+        end = max(column, 1) + 1
+        letters = ""
+        while end:
+            end, remainder = divmod(end - 1, 26)
+            letters = chr(ord("A") + remainder) + letters
+        ranges.append(f"'{year}'!A2:{letters}")
+
+    rows = (
+        (row[0], row[1] if len(row) > 1 else "", row[column])
+        for column, tab in zip(competition_columns, sheets.read(source, ranges))
+        for row in tab
+        if row and len(row) > column
+    )
+    return build_lists(rows)
 
 
 def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, summary=False):

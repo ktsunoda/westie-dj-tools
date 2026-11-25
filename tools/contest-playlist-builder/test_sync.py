@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from sync import DIVISIONS, Spotify, SyncError, load_playlist_ids, sync
+from sync import DIVISIONS, Spotify, SyncError, load_playlist_ids, source_lists, sync
 
 
 def history(artist, title, label):
@@ -18,6 +18,7 @@ class SyncTests(unittest.TestCase):
         self.state = [["Division", "Last row"]] + [
             [division, 2 if division == "All Star" else 1] for division in reversed(DIVISIONS)
         ]
+        self.headers = [[["Artist", "Title", *[""] * 8, "Competition"]]] * 2
         self.original = [[], [], [], [], [["A", "Old"]], []]
         self.history = [
             [history("A", "Old", "ALL-STARS")],
@@ -29,15 +30,37 @@ class SyncTests(unittest.TestCase):
         ]
 
     def test_check_verifies_saved_prefix_without_writing(self):
-        self.sheets.read.side_effect = [self.history, [self.state, *self.original, []]]
+        self.sheets.read.side_effect = [self.headers, self.history, [self.state, *self.original, []]]
         sync(self.sheets, self.spotify, "source", "output", check=True)
         self.sheets.read.assert_any_call("source", ["'2012'!A2:K", "'2025'!A2:K"])
         self.sheets.write.assert_not_called()
         self.spotify.search.assert_not_called()
 
+    def test_source_uses_competition_header_on_each_year_tab(self):
+        self.sheets.tabs.return_value = {"2025", "2026"}
+        older = ["Artist", "Title", *[""] * 8, "Competition"]
+        newer = ["Artist", "Title", *[""] * 7, " Competition ", "Spotify"]
+        self.sheets.read.side_effect = [
+            [[older], [newer]],
+            [[history("A", "Old", "Novice")],
+             [["B", "New", *[""] * 7, "Novice", "Newcomer"]]],
+        ]
+        lists, labels = source_lists(self.sheets, "source")
+        self.assertEqual(lists["Novice"], [["A", "Old"], ["B", "New"]])
+        self.assertEqual(lists["Newcomer"], [])
+        self.assertEqual(labels, ["Novice"])
+        self.sheets.read.assert_called_with("source", ["'2025'!A2:K", "'2026'!A2:J"])
+
+    def test_missing_competition_header_fails_before_output_writes(self):
+        self.sheets.tabs.return_value = {"2026"}
+        self.sheets.read.return_value = [[["Artist", "Title", "Spotify"]]]
+        with self.assertRaisesRegex(SyncError, "2026.*Competition header"):
+            sync(self.sheets, self.spotify, "source", "output", playlist_ids=self.playlist_ids)
+        self.sheets.write.assert_not_called()
+
     def test_changed_prefix_stops_before_writes(self):
         self.original[4] = [["Other", "Old"]]
-        self.sheets.read.side_effect = [self.history, [self.state, *self.original, []]]
+        self.sheets.read.side_effect = [self.headers, self.history, [self.state, *self.original, []]]
         with self.assertRaisesRegex(SyncError, "All Star.*saved sheet row 2"):
             sync(self.sheets, self.spotify, "source", "output", playlist_ids=self.playlist_ids)
         self.sheets.write.assert_not_called()
@@ -46,7 +69,7 @@ class SyncTests(unittest.TestCase):
     def test_resumes_at_next_row_and_updates_existing_counter(self):
         self.history[1][0][10] = "All Star"
         refreshed = [[], [], [], [], [["A", "Old"], ["B", "New (Clean edit)"], ["C", "Missing"]], []]
-        self.sheets.read.side_effect = [self.history, [self.state, *self.original, []], refreshed]
+        self.sheets.read.side_effect = [self.headers, self.history, [self.state, *self.original, []], refreshed]
         self.spotify.search.side_effect = ["spotify:track:new", None]
         sync(self.sheets, self.spotify, "source", "output", playlist_ids=self.playlist_ids)
         self.assertEqual([call.args for call in self.spotify.search.call_args_list],
@@ -60,7 +83,7 @@ class SyncTests(unittest.TestCase):
     def test_append_error_leaves_existing_counter(self):
         self.history[1] = self.history[1][1:2]
         refreshed = [[], [], [], [], [["A", "Old"], ["B", "New (Clean edit)"]], []]
-        self.sheets.read.side_effect = [self.history, [self.state, *self.original, []], refreshed]
+        self.sheets.read.side_effect = [self.headers, self.history, [self.state, *self.original, []], refreshed]
         self.spotify.add.side_effect = SyncError("Spotify playlist append failed")
         with self.assertRaisesRegex(SyncError, "playlist append"):
             sync(self.sheets, self.spotify, "source", "output", playlist_ids=self.playlist_ids)

@@ -1,6 +1,6 @@
 # Contest Playlist Builder
 
-This daily Python job ports Westie Contest Music Tools from Google Apps Script. It reads year tabs from 2012 onward, in ascending order, and rebuilds the six division lists in the existing output workbook. Spotify searches process rows after each division's saved physical sheet row in `Spotify Sync State`. A search with no result is logged to `Failed Searches`, whose timestamp is stored as UTC ISO 8601 text. An API error stops the run. Division checkpoints are saved after that division's work finishes.
+This daily Python job ports Westie Contest Music Tools from Google Apps Script. It reads year tabs from 2012 onward, in ascending order, locates the Competition column by its header on each tab, and rebuilds the six division lists in the existing output workbook. Spotify searches process rows after each division's saved physical sheet row in `Spotify Sync State`. A search with no result is logged to `Failed Searches`, whose timestamp is stored as UTC ISO 8601 text. An API error stops the run. Division checkpoints are saved after that division's work finishes.
 
 The port keeps the original case-insensitive division substring matching, case-sensitive artist/title deduplication. Playlist targets are configured per environment. The shared Spotify matcher checks title, artist credits, and recording version. Use `PYTHONPATH=. python tools/contest-playlist-builder/sync.py --summary` for the separate `Summary` helper.
 
