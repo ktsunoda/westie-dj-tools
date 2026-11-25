@@ -171,3 +171,35 @@ class SpotifyMatchingTests(unittest.TestCase):
             self.candidate("wrong", "Song (with Someone Else)", "Artist"),
         ]}})
         self.assertIsNone(find_track(api, "Artist", "Song", ""))
+
+    def test_recovery_handles_soundtrack_annotations_and_artist_spelling(self):
+        cases = (
+            ("Justin Timberlake", 'Song (Original Song From DreamWorks Animation\'s "Trolls")',
+             'Song (from DreamWorks Animation\'s "TROLLS")', ("Justin Timberlake",)),
+            ("Keb'Mo", "She Just Wants to Dance", "She Just Wants To Dance", ("Keb' Mo'",)),
+            ("Clean Bandit", "Rather Be feat. Jess Glynne", "Rather Be (feat. Jess Glynne)",
+             ("Clean Bandit", "Jess Glynne")),
+            ("David Guetta", "Little Bad Girl (feat.Taio Cruz & Ludacris)",
+             "Little Bad Girl (feat. Taio Cruz & Ludacris)", ("David Guetta", "Taio Cruz", "Ludacris")),
+        )
+        for artist, title, actual_title, credits in cases:
+            with self.subTest(title=title):
+                api = Mock(return_value={"tracks": {"items": [
+                    self.candidate("right", actual_title, *credits),
+                ]}})
+                self.assertEqual(find_track(api, artist, title, ""), "right")
+
+    def test_recovery_does_not_collapse_explicit_version_differences(self):
+        track = self.candidate("wrong", "Song - Radio Edit", "Artist")
+        api = Mock(return_value={"tracks": {"items": [track]}})
+        self.assertIsNone(find_track(api, "Artist", "Song", ""))
+        self.assertIsNone(find_track(api, "Artist", "Song (Acoustic)", ""))
+
+    def test_extended_recovery_preserves_existing_format_match(self):
+        broad = self.candidate("different-release", "How Long", "Tove Lo")
+        prior = self.candidate("existing-release", 'How Long - From"Euphoria" An HBO Original Series', "Tove Lo")
+        api = Mock(return_value={"tracks": {"items": [broad, prior]}})
+        self.assertEqual(
+            find_track(api, "Tove Lo", "How Long (From ”Euphoria” An HBO Original Series)", ""),
+            "existing-release",
+        )
