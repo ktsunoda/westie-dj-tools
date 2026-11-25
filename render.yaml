@@ -1,0 +1,20 @@
+services:
+  - type: cron
+    name: contest-playlist-builder
+    runtime: python
+    schedule: "0 12 * * *"
+    buildCommand: pip install -r tools/contest-playlist-builder/requirements.txt
+    startCommand: PYTHONPATH=. python tools/contest-playlist-builder/sync.py
+    envVars:
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /etc/secrets/google-drive.json
+      - key: SOURCE_SHEET_ID
+        sync: false
+      - key: OUTPUT_SHEET_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: SPOTIFY_REFRESH_TOKEN
+        sync: false
