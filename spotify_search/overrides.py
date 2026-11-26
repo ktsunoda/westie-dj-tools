@@ -86,8 +86,20 @@ class TrackOverrides:
         row = {"sheetId": self.sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": 2}
         for offset in range(5):
             cells = {"Artist": artist, "Title": title}
+            status_format = []
             if STATUS_HEADER in self.columns:
                 cells[STATUS_HEADER] = "⏳"
+                column = self.columns[STATUS_HEADER]
+                status_format = [{"repeatCell": {
+                    "range": {
+                        "sheetId": self.sheet_id, "startRowIndex": 1, "endRowIndex": 2,
+                        "startColumnIndex": column, "endColumnIndex": column + 1,
+                    },
+                    "cell": {"userEnteredFormat": {
+                        "horizontalAlignment": "CENTER",
+                    }},
+                    "fields": "userEnteredFormat.horizontalAlignment",
+                }}]
             metadata_id = (base_id + offset) % (2**31 - 1) + 1
             # The row and its unique key are created atomically. Deleting the row
             # in Sheets also removes its metadata so the pair can be logged again.
@@ -103,6 +115,7 @@ class TrackOverrides:
                     "rows": [{"values": [{"userEnteredValue": {"stringValue": text}}]}],
                     "fields": "userEnteredValue",
                 }} for name, text in cells.items()),
+                *status_format,
                 {"createDeveloperMetadata": {"developerMetadata": metadata}},
             ]}, timeout=30)
             if response.ok:
