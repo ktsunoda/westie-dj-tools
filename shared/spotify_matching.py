@@ -87,6 +87,7 @@ VERIFIED_RECORDINGS = {
     ("frank sinatra", "fly me to the moon feat count basie and his orchestra"): "USRH10800836",
     ("john mayer", "free fallin live"): "USSM10801204",
     ("julia sheer", "misery acoustic version feat eppic"): "GBDMT1200277",
+    ("stevie wonder", "signed sealed delivered im yours"): "USMO17082643",
 }
 ARTIST_ALIASES = {
     "jj grey and mofro": "jj grey mofro",
