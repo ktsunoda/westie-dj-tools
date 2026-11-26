@@ -358,11 +358,11 @@ class SpotifyMatchingTests(unittest.TestCase):
         self.assertIsNone(find_track(api, "Artist", "Song (Named Remix) (Contest Partial Edit)", ""))
 
     def test_verified_artist_rename_also_applies_to_guest_credits(self):
-        track = self.candidate("track", "Song (feat. R.O)", "Artist", "RUGI")
+        track = self.candidate("track", "Song (feat. Grace Gaustad)", "Artist", "Gaustad")
         api = Mock(return_value={"tracks": {"items": [track]}})
-        self.assertIsNone(find_track(api, "Artist", "Song (feat. R.O)", ""))
-        track["artists"][1]["id"] = "3TywsrRz1pBseLa6jNpq73"
-        self.assertEqual(find_track(api, "Artist", "Song (feat. R.O)", ""), "track")
+        self.assertIsNone(find_track(api, "Artist", "Song (feat. Grace Gaustad)", ""))
+        track["artists"][1]["id"] = "5MZxzpsn1zTTkiYwQ9Qz9b"
+        self.assertEqual(find_track(api, "Artist", "Song (feat. Grace Gaustad)", ""), "track")
 
     def test_recovery_equates_release_metadata_without_dropping_a_named_edit(self):
         source = self.candidate("right", "Soul Serenade - Remastered 2002", "The Jimmy Castor Bunch")

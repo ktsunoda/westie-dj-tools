@@ -66,7 +66,6 @@ CATALOG_ARTIST_ALIASES = {
     "madilyn": ("Madilyn Bailey", "0NxhAEPOSeCg6vypFr7yjU"),
     "martha and the vandellas": ("Martha Reeves & The Vandellas", "1Pe5hlKMCTULjosqZ6KanP"),
     "mikolas josef": ("MIKOLAS", "6Kz7MXIUFMtp5Ts91lagtR"),
-    "r o": ("RUGI", "3TywsrRz1pBseLa6jNpq73"),
     "scott bradlees postmodern jukebox": ("Postmodern Jukebox", "5HYNPEO2NNBONQkp3Mvwvc"),
 }
 ARTIST_ALIASES = {
