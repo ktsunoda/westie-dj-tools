@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from shared.spotify_matching import find_track
+from shared.spotify_matching import find_track, is_available, normalized
 
 DIVISIONS = {
     "Newcomer": ("newcomer",),
@@ -19,6 +19,14 @@ DIVISIONS = {
 }
 STATE = "'Spotify Sync State'"
 FAILED = "'Failed Searches'"
+# Use an alternate catalog cut only for reviewed source titles.
+CATALOG_FALLBACKS = {
+    ("bill withers & grover washingt", "just the two of us"): ("USEE19901162", "1ko2lVN0vKGUl9zrU0qSlT"),
+    ("dan barrett", "love potion #9 (cleaned)"): ("US89R0610493", "3oPfJnT3jMFixktiN6f9Oj"),
+    ("justin timberlake", "lovestoned"): ("USJI10600495", "5iyE2d4U3Vc5cqY9mPTlpy"),
+    ("salt-n-pepa", "shoop"): ("USV291488303", "1boZz3pZBwE6BG68RhioNn"),
+    ("usher", "more"): ("USLF21000098", "0aBKFfdyOD1Ttvgv0cfjjJ"),
+}
 LEGACY_TRACK_SUFFIXES = (
     r"\[feat\.[^\]]*\]",
     r"\(feat\.[^)]*\)",
@@ -166,15 +174,30 @@ class Spotify:
             operation,
         )
 
-    def search(self, artist, title):
+    def search(self, artist, title, *, duration_ms=None):
         def api(method, path, **kwargs):
             return self.request(method, path.lstrip("/"), "Spotify track search", **kwargs)
 
         artist = cell_text(artist)
-        matched = find_track(api, artist, title, "")
-        if matched or not self.legacy_fallback:
+        search_title = re.sub(r"\s*\(explicit\)$", "", title, flags=re.IGNORECASE).strip() or title
+        matched = find_track(api, artist, search_title, "", duration_ms=duration_ms)
+        if matched:
             return matched
 
+        fallback = CATALOG_FALLBACKS.get((normalized(artist), normalized(title)))
+        if fallback:
+            isrc, track_id = fallback
+            result = api("GET", "/search", params={"q": f"isrc:{isrc}", "type": "track", "limit": 10})
+            for track in result["tracks"]["items"]:
+                if (track.get("id") == track_id
+                        and track.get("external_ids", {}).get("isrc") == isrc
+                        and is_available(track)
+                        and (not title.casefold().endswith("(cleaned)") or track.get("explicit") is False)):
+                    logging.info("Verified Spotify catalog fallback: %s — %s", artist, title)
+                    return track["uri"]
+
+        if not self.legacy_fallback:
+            return None
         legacy_title = legacy_search_title(title)
         if not legacy_title:
             return None
@@ -182,7 +205,7 @@ class Spotify:
             "q": f"track:{legacy_title} artist:{artist}", "type": "track", "limit": 1,
         })
         candidates = result["tracks"]["items"]
-        if not candidates:
+        if not candidates or not is_available(candidates[0]):
             return None
         logging.info("Legacy Spotify fallback: %s — %s", artist, title)
         return candidates[0]["uri"]
@@ -213,13 +236,32 @@ def read_counters(state_rows):
     return counters
 
 
-def source_lists(sheets, source):
+def duration_milliseconds(value):
+    if type(value) in (int, float) and 0 < value < 1:
+        return round(value * 86_400_000)
+    if isinstance(value, str) and re.fullmatch(r"\d+:[0-5]\d", value):
+        minutes, seconds = map(int, value.split(":"))
+        return (minutes * 60 + seconds) * 1000
+    return None
+
+
+def matching_duration(values):
+    if not values:
+        return None
+    shortest, longest = min(values), max(values)
+    if longest - shortest <= 1000:
+        return (shortest + longest) // 2
+    return None
+
+
+def source_lists(sheets, source, *, durations=None):
     years = sorted(name for name in sheets.tabs(source)
                    if re.fullmatch(r"[0-9]{4}", name) and int(name) >= 2012)
     if not years:
         raise SyncError("The source spreadsheet has no year tabs from 2012 onward.")
     headers = sheets.read(source, [f"'{year}'!1:1" for year in years])
     competition_columns = []
+    duration_columns = []
     ranges = []
     for year, header_rows in zip(years, headers):
         header = header_rows[0] if header_rows else []
@@ -229,7 +271,10 @@ def source_lists(sheets, source):
             raise SyncError(f"Year tab {year} must have exactly one Competition header.")
         column = matches[0]
         competition_columns.append(column)
-        end = max(column, 1) + 1
+        duration_column = next((i for i, value in enumerate(header)
+                                if isinstance(value, str) and value.strip().casefold() == "duration"), 0)
+        duration_columns.append(duration_column)
+        end = max(column, duration_column, 1) + 1
         letters = ""
         while end:
             end, remainder = divmod(end - 1, 26)
@@ -238,7 +283,10 @@ def source_lists(sheets, source):
 
     rows = []
     numeric_titles = []
-    for year, column, tab in zip(years, competition_columns, sheets.read(source, ranges)):
+    source_durations = []
+    for year, column, duration_column, tab in zip(
+        years, competition_columns, duration_columns, sheets.read(source, ranges)
+    ):
         for index, row in enumerate(tab, 2):
             if len(row) <= column:
                 continue
@@ -247,6 +295,9 @@ def source_lists(sheets, source):
             if artist and isinstance(label, str) and label.strip() and type(title) in (int, float):
                 numeric_titles.append((len(rows), f"'{year}'!B{index}"))
             rows.append((artist, title, label))
+            if durations is not None:
+                value = row[duration_column] if 0 < duration_column < len(row) else None
+                source_durations.append(duration_milliseconds(value))
     if numeric_titles:
         displayed = sheets.read(source, [address for _, address in numeric_titles],
                                 render_option="FORMATTED_VALUE")
@@ -254,13 +305,18 @@ def source_lists(sheets, source):
             if cells and cells[0]:
                 artist, _, label = rows[index]
                 rows[index] = artist, cells[0][0], label
+    if durations is not None:
+        for (artist, title, label), duration in zip(rows, source_durations):
+            if duration and artist and title and isinstance(label, str) and label.strip():
+                durations.setdefault((cell_text(artist), cell_text(title).strip()), set()).add(duration)
     return build_lists(rows)
 
 
 def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, summary=False):
     if not (check or summary) and playlist_ids is None:
         raise SyncError("Spotify playlist targets are required for sync.")
-    lists, labels = source_lists(sheets, source)
+    durations = {}
+    lists, labels = source_lists(sheets, source, durations=durations)
     if summary:
         if labels:
             sheets.write(output, {"'Summary'!A1": [[label] for label in labels]})
@@ -299,7 +355,8 @@ def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, sum
                 continue
             artist, title = row[:2]
             title = cell_text(title).strip()
-            uri = spotify.search(artist, title)
+            duration_ms = matching_duration(durations.get((cell_text(artist), title), ()))
+            uri = spotify.search(artist, title, duration_ms=duration_ms)
             if uri:
                 tracks.append(uri)
             else:

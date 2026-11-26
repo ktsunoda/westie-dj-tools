@@ -52,7 +52,7 @@ class SpotifyMatchingTests(unittest.TestCase):
 
         self.assertEqual(find_track(api, "former  NAME", "Evening Lights", ""), "match")
 
-    def test_search_keeps_explicit_versions_including_radio_edit(self):
+    def test_search_preserves_a_matching_version_and_requires_named_variants(self):
         for version in ("Radio Edit", "Live", "Acoustic", "Stripped", "Club Remix"):
             with self.subTest(version=version):
                 base = self.candidate("base", "Song", "Artist")
@@ -62,7 +62,8 @@ class SpotifyMatchingTests(unittest.TestCase):
                 api = Mock(return_value={"tracks": {"items": [base, correct]}})
                 self.assertEqual(find_track(api, "Artist", title, remix), "version")
                 api.return_value = {"tracks": {"items": [base]}}
-                self.assertIsNone(find_track(api, "Artist", title, remix))
+                self.assertEqual(find_track(api, "Artist", title, remix),
+                                 "base" if version == "Radio Edit" else None)
 
     def test_search_prefers_literal_match_for_band_name(self):
         api = Mock(return_value={"tracks": {"items": [
@@ -190,7 +191,7 @@ class SpotifyMatchingTests(unittest.TestCase):
                 self.assertEqual(find_track(api, artist, title, ""), "right")
 
     def test_recovery_does_not_collapse_explicit_version_differences(self):
-        track = self.candidate("wrong", "Song - Radio Edit", "Artist")
+        track = self.candidate("wrong", "Song - Club Remix", "Artist")
         api = Mock(return_value={"tracks": {"items": [track]}})
         self.assertIsNone(find_track(api, "Artist", "Song", ""))
         self.assertIsNone(find_track(api, "Artist", "Song (Acoustic)", ""))
@@ -316,3 +317,118 @@ class SpotifyMatchingTests(unittest.TestCase):
         clean["duration_ms"] = 180000
         self.assertIsNone(find_track(api, "Ciara", "One, Two Step", ""))
         self.assertEqual(find_track(api, "Ciara", "1, 2 Step", ""), "explicit")
+
+    def test_recovery_uses_catalog_explicit_flag_for_requested_version(self):
+        explicit = self.candidate("explicit", "Don't Wanna Go Home", "Jason Derulo")
+        clean = self.candidate("clean", "Don't Wanna Go Home", "Jason Derulo")
+        explicit["explicit"] = True
+        clean["explicit"] = False
+        api = Mock(return_value={"tracks": {"items": [explicit, clean]}})
+        self.assertEqual(find_track(api, "Jason Derülo", "Don't Wanna Go Home (Clean)", ""), "clean")
+        self.assertEqual(find_track(api, "Jason Derülo", "Don't Wanna Go Home (Explicit)", ""), "explicit")
+        self.assertIsNone(find_track(api, "Jason Derülo", "Don't Wanna Go Home (Clean Edit)", ""))
+
+    def test_recovery_equates_release_metadata_without_dropping_a_named_edit(self):
+        source = self.candidate("right", "Soul Serenade - Remastered 2002", "The Jimmy Castor Bunch")
+        api = Mock(return_value={"tracks": {"items": [source]}})
+        self.assertEqual(find_track(api, "The Jimmy Castor Bunch", "Soul Serenade (Remastered)", ""), "right")
+        self.assertIsNone(find_track(api, "The Jimmy Castor Bunch", "Soul Serenade (2020 Remaster)", ""))
+        self.assertIsNone(find_track(api, "The Jimmy Castor Bunch", "Soul Serenade (Live)", ""))
+
+    def test_duration_breaks_ties_between_otherwise_matching_recordings(self):
+        first = self.candidate("first", "Walk On", "Ruthie Foster")
+        second = self.candidate("second", "Walk On", "Ruthie Foster")
+        first["duration_ms"] = 276000
+        second["duration_ms"] = 325000
+        api = Mock(return_value={"tracks": {"items": [first, second]}})
+        args = (api, "Ruthie Foster", "Walk On (Album Version)", "")
+        self.assertIsNone(find_track(*args))
+        self.assertEqual(find_track(*args, duration_ms=277000), "first")
+        self.assertIsNone(find_track(*args, duration_ms=290000))
+        second["duration_ms"] = 278000
+        self.assertIsNone(find_track(*args, duration_ms=277000))
+
+    def test_recovery_does_not_reject_a_unique_match_by_duration(self):
+        track = self.candidate("original", "Don't Wanna Go Home", "Jason Derulo")
+        track.update(explicit=False, duration_ms=206080)
+        api = Mock(return_value={"tracks": {"items": [track]}})
+        self.assertEqual(find_track(api, "Jason Derülo", "Don't Wanna Go Home (Clean)", "",
+                                    duration_ms=180000), "original")
+
+    def test_versus_label_requires_both_artists_to_be_credited(self):
+        correct = self.candidate("right", "This Girl (Kungs Vs. Cookin' On 3 Burners)",
+                                 "Kungs", "Cookin' On 3 Burners")
+        wrong = self.candidate("wrong", correct["name"], "Kungs")
+        api = Mock(return_value={"tracks": {"items": [wrong, correct]}})
+        self.assertEqual(find_track(api, "Kungs & Cookin' On 3 Burners", "This Girl", ""), "right")
+
+    def test_radio_edit_can_find_original_without_matching_duration(self):
+        studio = self.candidate("studio", "Chunky", "Bruno Mars")
+        studio["duration_ms"] = 186973
+        api = Mock(return_value={"tracks": {"items": [studio]}})
+        args = (api, "Bruno Mars", "Chunky (Radio Edit)", "")
+        self.assertEqual(find_track(*args, duration_ms=187000), "studio")
+        self.assertEqual(find_track(*args, duration_ms=190000), "studio")
+        self.assertEqual(find_track(*args), "studio")
+        studio["name"] = "Chunky - Extended Mix"
+        self.assertIsNone(find_track(*args, duration_ms=187000))
+
+    def test_clean_counterpart_can_have_small_encoding_difference_on_same_album(self):
+        explicit = self.candidate("explicit", "Up Down", "T-Pain")
+        clean = self.candidate("clean", "Up Down", "T-Pain")
+        explicit.update(explicit=True, duration_ms=231093, album={"name": "Happy Hour"})
+        clean.update(explicit=False, duration_ms=230986, album={"name": "Happy Hour"})
+        api = Mock(return_value={"tracks": {"items": [explicit, clean]}})
+        self.assertEqual(find_track(api, "T-Pain", "Up Down", ""), "clean")
+        clean["album"]["name"] = "Other Release"
+        self.assertEqual(find_track(api, "T-Pain", "Up Down", ""), "explicit")
+
+    def test_verified_recording_fallback_checks_catalog_identity_and_availability(self):
+        wrong = self.candidate("wrong", "Free Fallin' - Live", "John Mayer")
+        wrong.update(duration_ms=263573, external_ids={"isrc": "OTHER"})
+        correct = self.candidate("right", "Free Fallin' - Live at the Nokia Theatre", "John Mayer")
+        correct.update(duration_ms=263573, external_ids={"isrc": "USSM10801204"})
+
+        def api(method, path, *, params):
+            items = [wrong, correct] if params["q"] == "isrc:USSM10801204" else []
+            return {"tracks": {"items": items}}
+
+        args = (api, "John Mayer", "Free Fallin' (Live)", "")
+        self.assertEqual(find_track(*args, duration_ms=264000), "right")
+        self.assertEqual(find_track(*args, duration_ms=257000), "right")
+        self.assertEqual(find_track(*args), "right")
+        correct["available_markets"] = []
+        self.assertIsNone(find_track(*args, duration_ms=264000))
+
+    def test_short_edit_can_find_the_full_length_beyonce_track(self):
+        original = self.candidate("original", "Partition", "Beyoncé")
+        original["duration_ms"] = 319000
+
+        def api(method, path, *, params):
+            items = [original] if params["q"] == "Beyoncé Partition" else []
+            return {"tracks": {"items": items}}
+
+        self.assertEqual(find_track(api, "Beyoncé", "Partition (Short Edit)", "", duration_ms=175000),
+                         "original")
+
+    def test_search_ignores_an_unplayable_exact_match(self):
+        unavailable = self.candidate("unavailable", "Song", "Artist")
+        unavailable["is_playable"] = False
+        playable = self.candidate("playable", "Song", "Artist")
+        api = Mock(return_value={"tracks": {"items": [unavailable, playable]}})
+        self.assertEqual(find_track(api, "Artist", "Song", ""), "playable")
+
+    def test_early_matches_require_requested_guests(self):
+        solo = self.candidate("solo", "Song", "Artist")
+        mislabeled = self.candidate("mislabeled", "Song (feat. Guest)", "Artist")
+        duet = self.candidate("duet", "Song (feat. Guest)", "Artist", "Guest")
+        api = Mock(return_value={"tracks": {"items": [solo, mislabeled, duet]}})
+        self.assertEqual(find_track(api, "Artist", "Song (feat. Guest)", ""), "duet")
+        api.return_value = {"tracks": {"items": [solo, mislabeled]}}
+        self.assertIsNone(find_track(api, "Artist", "Song (feat. Guest)", ""))
+
+    def test_literal_clean_title_cannot_accept_an_explicit_recording(self):
+        wrong = self.candidate("wrong", "Song (Clean)", "Artist")
+        wrong["explicit"] = True
+        api = Mock(return_value={"tracks": {"items": [wrong]}})
+        self.assertIsNone(find_track(api, "Artist", "Song (Clean)", ""))

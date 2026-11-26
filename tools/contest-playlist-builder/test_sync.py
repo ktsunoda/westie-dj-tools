@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from sync import DIVISIONS, Spotify, SyncError, load_playlist_ids, source_lists, sync
+from sync import DIVISIONS, Spotify, SyncError, load_playlist_ids, matching_duration, source_lists, sync
 
 
 def history(artist, title, label):
@@ -65,6 +65,25 @@ class SyncTests(unittest.TestCase):
             "source", ["'2026'!B2"], render_option="FORMATTED_VALUE",
         )
 
+    def test_sync_passes_history_duration_without_changing_output_rows(self):
+        for columns in self.headers:
+            columns[0][2] = "Duration"
+        self.history[1][1][2] = "3:26"
+        self.history[1][2][2] = 210 / 86400
+        refreshed = [[], [], [], [], [["A", "Old"], ["B", "New (Clean edit)"], ["C", "Missing"]], []]
+        self.history[1][0][10] = "All Star"
+        self.sheets.read.side_effect = [self.headers, self.history, [self.state, *self.original, []], refreshed]
+        self.spotify.search.side_effect = ["spotify:track:new", None]
+        sync(self.sheets, self.spotify, "source", "output", playlist_ids=self.playlist_ids)
+        self.assertEqual([call.kwargs["duration_ms"] for call in self.spotify.search.call_args_list],
+                         [206000, 210000])
+        self.sheets.write.assert_any_call("output", {"'All Star'!A2:B": refreshed[4]})
+
+    def test_matching_duration_allows_rounding_but_rejects_different_edits(self):
+        self.assertEqual(matching_duration({211000, 212000}), 211500)
+        self.assertIsNone(matching_duration({211000, 230000}))
+        self.assertIsNone(matching_duration(set()))
+
     def test_missing_competition_header_fails_before_output_writes(self):
         self.sheets.tabs.return_value = {"2026"}
         self.sheets.read.return_value = [[["Artist", "Title", "Spotify"]]]
@@ -122,10 +141,10 @@ class SyncTests(unittest.TestCase):
         spotify = Spotify(session, legacy_fallback=True)
         spotify.access_token = "test-token"
         session.request.return_value.json.return_value = {"tracks": {"items": [
-            {"uri": "spotify:track:correct", "name": "Song (Radio Edit)",
+            {"uri": "spotify:track:correct", "name": "Song (Clean Edit)",
              "artists": [{"name": "Artist"}]},
         ]}}
-        self.assertEqual(spotify.search("Artist", "Song (Radio Edit)"), "spotify:track:correct")
+        self.assertEqual(spotify.search("Artist", "Song (Clean Edit)"), "spotify:track:correct")
         session.request.assert_called_once()
 
         session.reset_mock()
@@ -135,9 +154,9 @@ class SyncTests(unittest.TestCase):
         ]}}
         strict = Spotify(session)
         strict.access_token = "test-token"
-        self.assertIsNone(strict.search("Artist", "Song (Radio Edit)"))
+        self.assertIsNone(strict.search("Artist", "Song (Clean Edit)"))
         with self.assertLogs(level="INFO"):
-            self.assertEqual(spotify.search("Artist", "Song (Radio Edit)"), "spotify:track:album")
+            self.assertEqual(spotify.search("Artist", "Song (Clean Edit)"), "spotify:track:album")
         self.assertEqual(session.request.call_args.kwargs["params"],
                          {"q": "track:Song artist:Artist", "type": "track", "limit": 1})
 
@@ -147,6 +166,42 @@ class SyncTests(unittest.TestCase):
         spotify.access_token = "test-token"
         session.request.return_value.json.return_value = {"tracks": {"items": []}}
         self.assertIsNone(spotify.search("Artist", "Song (Album Version)"))
+
+    def test_explicit_notes_do_not_require_an_explicit_catalog_flag(self):
+        session = Mock()
+        spotify = Spotify(session)
+        spotify.access_token = "test-token"
+        session.request.return_value.json.return_value = {"tracks": {"items": [{
+            "uri": "spotify:track:match", "name": "Don't Wanna Go Home",
+            "artists": [{"name": "Jason Derulo"}], "explicit": False,
+        }]}}
+        self.assertEqual(spotify.search("Jason Derülo", "Don't Wanna Go Home (Explicit)"),
+                         "spotify:track:match")
+
+    def test_catalog_fallback_requires_the_reviewed_release_and_recording(self):
+        session = Mock()
+        spotify = Spotify(session)
+        spotify.access_token = "test-token"
+        correct = {
+            "id": "1ko2lVN0vKGUl9zrU0qSlT", "uri": "spotify:track:1ko2lVN0vKGUl9zrU0qSlT",
+            "external_ids": {"isrc": "USEE19901162"}, "is_playable": True,
+        }
+        other_edit = {**correct, "id": "another-release", "uri": "spotify:track:another-release"}
+
+        def request(method, url, **kwargs):
+            response = Mock(ok=True)
+            query = kwargs["params"]["q"]
+            tracks = [other_edit, correct] if query == "isrc:USEE19901162" else []
+            response.json.return_value = {"tracks": {"items": tracks}}
+            return response
+
+        session.request.side_effect = request
+        artist = "Bill Withers & Grover Washingt"
+        with self.assertLogs(level="INFO"):
+            self.assertEqual(spotify.search(artist, "Just the Two of Us"), correct["uri"])
+        self.assertIsNone(spotify.search(artist, "Just the Two of Us (Acoustic)"))
+        correct["is_playable"] = False
+        self.assertIsNone(spotify.search(artist, "Just the Two of Us"))
 
     def test_spotify_search_uses_shared_matcher_and_preserves_version(self):
         session = Mock()
