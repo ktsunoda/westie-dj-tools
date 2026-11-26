@@ -217,3 +217,102 @@ class SpotifyMatchingTests(unittest.TestCase):
             find_track(api, "Bruno Mars", "Finesse (Remix) [feat. Cardi B]", ""),
             {"compilation", "single"},
         )
+
+    def test_recovery_compares_spelled_out_numbers_and_catalog_credits(self):
+        correct = self.candidate("right", "1, 2 Step (feat. Missy Elliott)", "Ciara", "Missy Elliott")
+        wrong = self.candidate("wrong", "1, 2 Step - Remix", "Ciara", "Missy Elliott")
+
+        def api(method, path, *, params):
+            items = [wrong, correct] if params["q"] == "1 2 step Ciara" else []
+            return {"tracks": {"items": items}}
+
+        self.assertEqual(find_track(api, "Ciara", "One, Two Step (feat. Missy Elliott)", ""), "right")
+        self.assertIsNone(find_track(api, "Ciara", "One, Two Step (feat. Someone Else)", ""))
+
+    def test_recovery_matches_stylized_words_in_the_title(self):
+        track = self.candidate("right", "She Came II Give It II U", "Usher", "Nicki Minaj")
+        api = Mock(return_value={"tracks": {"items": [track]}})
+        self.assertEqual(
+            find_track(api, "Usher", "She Came to Give It to You (feat. Nicki Minaj)", ""), "right"
+        )
+
+    def test_recovery_uses_cover_performer_and_keeps_requested_version(self):
+        correct = self.candidate("right", "Someone You Loved", "Cover Performer")
+        original = self.candidate("original", "Someone You Loved", "Original Performer")
+
+        def api(method, path, *, params):
+            items = [original, correct] if params["q"] == "Someone You Loved Cover Performer" else []
+            return {"tracks": {"items": items}}
+
+        self.assertEqual(
+            find_track(api, "Cover Performer", "Someone You Loved (Original Performer Cover)", ""),
+            "right",
+        )
+        self.assertIsNone(
+            find_track(api, "Cover Performer", "Someone You Loved (Original Performer Acoustic Cover)", "")
+        )
+
+    def test_recovery_matches_live_label_only_for_same_venue(self):
+        correct = self.candidate("right", "Attention - Live from Spotify Studios NYC", "Charlie Puth")
+        wrong = self.candidate("wrong", "Attention - Live from Spotify Studios London", "Charlie Puth")
+        api = Mock(return_value={"tracks": {"items": [wrong, correct]}})
+        self.assertEqual(
+            find_track(api, "Charlie Puth", "Attention - Recorded at Spotify Studios NYC", ""),
+            "right",
+        )
+        self.assertIsNone(
+            find_track(api, "Charlie Puth", "Attention - Recorded at Spotify Studios LA", "")
+        )
+
+    def test_credit_query_preserves_the_requested_version(self):
+        correct = self.candidate("right", "Only Here for a Little While - Acoustic", "Artist", "Guest")
+        studio = self.candidate("studio", "Only Here for a Little While", "Artist", "Guest")
+
+        def api(method, path, *, params):
+            items = [studio, correct] if params["q"] == "Artist Guest Only Here for a Little While" else []
+            return {"tracks": {"items": items}}
+
+        self.assertEqual(
+            find_track(api, "Artist", "Only Here for a Little While (Acoustic) (feat. Guest)", ""), "right"
+        )
+
+    def test_catalog_alias_requires_the_verified_artist_id(self):
+        track = self.candidate("right", "Sandman", "Gaustad")
+        api = Mock(return_value={"tracks": {"items": [track]}})
+        self.assertIsNone(find_track(api, "Grace Gaustad", "Sandman", ""))
+        track["artists"][0]["id"] = "5MZxzpsn1zTTkiYwQ9Qz9b"
+        self.assertEqual(find_track(api, "Grace Gaustad", "Sandman", ""), "right")
+
+    def test_duet_labels_require_both_performers(self):
+        duet = self.candidate("right", "Hold My Hand (with Akon)", "Michael Jackson", "Akon")
+        solo = self.candidate("solo", "Hold My Hand", "Michael Jackson")
+        api = Mock(return_value={"tracks": {"items": [solo, duet]}})
+        self.assertEqual(
+            find_track(api, "Michael Jackson & Akon", "Hold My Hand (Duet with Akon)", ""),
+            "right",
+        )
+
+    def test_original_cover_credits_are_not_required_on_the_cover_recording(self):
+        cover = self.candidate("cover", "La La La", "Noah Guthrie")
+        original = self.candidate("original", "La La La", "Naughty Boy", "Sam Smith")
+        guest = self.candidate("guest", "La La La (feat. Noah Guthrie)", "Other Artist", "Noah Guthrie")
+        api = Mock(return_value={"tracks": {"items": [original, guest, cover]}})
+        self.assertEqual(
+            find_track(api, "Noah Guthrie", "La La La (Naughty Boy ft. Sam Smith Cover)", ""),
+            "cover",
+        )
+        self.assertIsNone(
+            find_track(api, "Noah Guthrie", "La La La (Naughty Boy ft. Sam Smith Clean Cover)", "")
+        )
+
+    def test_prefers_clean_among_equivalent_search_results(self):
+        explicit = self.candidate("explicit", "1, 2 Step", "Ciara")
+        clean = self.candidate("clean", "1, 2 Step", "Ciara")
+        explicit.update(explicit=True, duration_ms=200000)
+        clean.update(explicit=False, duration_ms=200000)
+        api = Mock(return_value={"tracks": {"items": [explicit, clean]}})
+        self.assertEqual(find_track(api, "Ciara", "1, 2 Step", ""), "clean")
+        self.assertEqual(find_track(api, "Ciara", "One, Two Step", ""), "clean")
+        clean["duration_ms"] = 180000
+        self.assertIsNone(find_track(api, "Ciara", "One, Two Step", ""))
+        self.assertEqual(find_track(api, "Ciara", "1, 2 Step", ""), "explicit")
