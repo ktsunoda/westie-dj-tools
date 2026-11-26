@@ -361,3 +361,41 @@ class SpotifyMatchingTests(unittest.TestCase):
         wrong = self.candidate("wrong", correct["name"], "Kungs")
         api = Mock(return_value={"tracks": {"items": [wrong, correct]}})
         self.assertEqual(find_track(api, "Kungs & Cookin' On 3 Burners", "This Girl", ""), "right")
+
+    def test_radio_edit_recovery_requires_almost_identical_duration(self):
+        studio = self.candidate("studio", "Chunky", "Bruno Mars")
+        studio["duration_ms"] = 186973
+        api = Mock(return_value={"tracks": {"items": [studio]}})
+        args = (api, "Bruno Mars", "Chunky (Radio Edit)", "")
+        self.assertEqual(find_track(*args, duration_ms=187000), "studio")
+        self.assertIsNone(find_track(*args, duration_ms=190000))
+        self.assertIsNone(find_track(*args))
+        studio["name"] = "Chunky - Extended Mix"
+        self.assertIsNone(find_track(*args, duration_ms=187000))
+
+    def test_clean_counterpart_can_have_small_encoding_difference_on_same_album(self):
+        explicit = self.candidate("explicit", "Up Down", "T-Pain")
+        clean = self.candidate("clean", "Up Down", "T-Pain")
+        explicit.update(explicit=True, duration_ms=231093, album={"name": "Happy Hour"})
+        clean.update(explicit=False, duration_ms=230986, album={"name": "Happy Hour"})
+        api = Mock(return_value={"tracks": {"items": [explicit, clean]}})
+        self.assertEqual(find_track(api, "T-Pain", "Up Down", ""), "clean")
+        clean["album"]["name"] = "Other Release"
+        self.assertEqual(find_track(api, "T-Pain", "Up Down", ""), "explicit")
+
+    def test_verified_recording_fallback_checks_catalog_identity_and_availability(self):
+        wrong = self.candidate("wrong", "Free Fallin' - Live", "John Mayer")
+        wrong.update(duration_ms=263573, external_ids={"isrc": "OTHER"})
+        correct = self.candidate("right", "Free Fallin' - Live at the Nokia Theatre", "John Mayer")
+        correct.update(duration_ms=263573, external_ids={"isrc": "USSM10801204"})
+
+        def api(method, path, *, params):
+            items = [wrong, correct] if params["q"] == "isrc:USSM10801204" else []
+            return {"tracks": {"items": items}}
+
+        args = (api, "John Mayer", "Free Fallin' (Live)", "")
+        self.assertEqual(find_track(*args, duration_ms=264000), "right")
+        self.assertIsNone(find_track(*args, duration_ms=257000))
+        self.assertIsNone(find_track(*args))
+        correct["available_markets"] = []
+        self.assertIsNone(find_track(*args, duration_ms=264000))

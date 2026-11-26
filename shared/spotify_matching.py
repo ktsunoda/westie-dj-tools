@@ -38,6 +38,7 @@ RELEASE_LABEL = re.compile(
     r"\s*(?:[\[(]|\s+-\s+)(?:single version|(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?)"
     r"(?:[\])]$|$)", re.I,
 )
+RADIO_LABEL = re.compile(r"\s*(?:[\[(]|\s+-\s+)radio edit[\])]?$", re.I)
 CONTENT_LABEL = re.compile(
     r"\s*(?:[\[(]|\s+-\s+)(clean(?: version)?|explicit(?: version)?)"
     r"(?:[\])]$|$)", re.I,
@@ -65,7 +66,30 @@ CATALOG_ARTIST_ALIASES = {
     "q": ("Q Marsden", "22vqVhfPJab5kkU9txDGX3"),
     "scott bradlees postmodern jukebox": ("Postmodern Jukebox", "5HYNPEO2NNBONQkp3Mvwvc"),
 }
+TITLE_ALIASES = {
+    ("britney spears", "one more time"): "...Baby One More Time",
+    ("nath brooks", "redbone"): "Redbone (Stay Woke)",
+    ("syml", "dim recorded at st marks cathedral"): "Dim - Recorded Live at St. Mark's Cathedral, Seattle",
+    ("syml", "fear of water"): "Fear of the Water",
+    ("the script", "breakeven falling to pieces"): "Breakeven",
+    ("the temptations", "aint to proud to beg"): "Ain't Too Proud To Beg",
+}
+# Exact source credits for recordings verified against a named release.
+# These are fallbacks for title search ambiguity, not alternate versions.
+VERIFIED_RECORDINGS = {
+    ("aretha franklin", "baby i love you"): "USAT20801258",
+    ("aretha franklin", "swanee remastered"): "USSM10600759",
+    ("arlene zelina", "together again"): "TCAFS2104639",
+    ("bob seger the silver bullet band", "old time rock and roll"): "USCA28600270",
+    ("britney spears", "one more time"): "USJI19810404",
+    ("c c music factory", "gonna make you sweat everybody dance now"): "USSM19000533",
+    ("eva cassidy", "wade in the water"): "USA449845002",
+    ("frank sinatra", "fly me to the moon feat count basie and his orchestra"): "USRH10800836",
+    ("john mayer", "free fallin live"): "USSM10801204",
+    ("julia sheer", "misery acoustic version feat eppic"): "GBDMT1200277",
+}
 ARTIST_ALIASES = {
+    "jj grey and mofro": "jj grey mofro",
     "kool mo dee": "kool moe dee",
     "cee lo green": "ceelo green",
     "black eyed peas": "the black eyed peas",
@@ -141,7 +165,13 @@ def has_recovery_credit(credit, artists):
         return True
     names = re.split(r"\s+with\s+", credit, flags=re.I)
     names = [name for part in names for name in CREDIT_SEPARATOR.split(part)]
-    return len(names) > 1 and all(artist_key(name) in artists for name in names)
+    if len(names) > 1 and all(artist_key(name) in artists for name in names):
+        return True
+    # Some duo credits use one surname for both artists.
+    if len(names) == 2 and len(names[0].split()) == 1 and len(names[1].split()) == 2:
+        surname = names[1].split()[-1]
+        return artist_key(names[1]) in artists and artist_key(f"{names[0]} {surname}") in artists
+    return False
 
 
 def recording_key(track):
@@ -152,7 +182,11 @@ def recording_key(track):
 def is_clean_counterpart(clean, explicit):
     if clean.get("explicit") is not False or explicit.get("explicit") is not True:
         return False
-    if not clean.get("duration_ms") or clean["duration_ms"] != explicit.get("duration_ms"):
+    if not clean.get("duration_ms") or not explicit.get("duration_ms"):
+        return False
+    delta = abs(clean["duration_ms"] - explicit["duration_ms"])
+    if delta and (delta > 250 or not clean.get("album", {}).get("name")
+                  or clean["album"]["name"] != explicit.get("album", {}).get("name")):
         return False
     if title_key(clean["name"]) != title_key(explicit["name"]):
         return False
@@ -170,10 +204,13 @@ def choose_recording(matches, duration_ms=None):
         if is_clean_counterpart(second, first):
             return second["uri"]
     if duration_ms is not None:
-        close = [track for track in matches.values() if track.get("duration_ms")
-                 and abs(track["duration_ms"] - duration_ms) <= 2000]
-        if len(close) == 1:
-            return close[0]["uri"]
+        for tolerance in (500, 2000):
+            close = [track for track in matches.values() if track.get("duration_ms")
+                     and abs(track["duration_ms"] - duration_ms) <= tolerance]
+            if len(close) == 1:
+                return close[0]["uri"]
+            if close:
+                break
     return None
 
 
@@ -188,6 +225,7 @@ def prefer_clean(track, candidates):
 def recover_track(search, artist, names, candidates, duration_ms):
     lead, *inline_guests = INLINE_FEATURED.split(artist, maxsplit=1)
     expected = {}
+    expected_radio = {}
     queries = []
     for name in names:
         cover = COVER_LABEL.search(name)
@@ -198,9 +236,16 @@ def recover_track(search, artist, names, candidates, duration_ms):
         if content:
             explicit = content[1].casefold().startswith("explicit")
             clean = clean[:content.start()].strip()
-        expected.setdefault(equivalent_title_key(clean), []).append(
-            (clean, inline_guests + guests, lookup_name != name, explicit)
-        )
+        catalog_title = TITLE_ALIASES.get((artist_key(lead), tolerant_key(clean)))
+        if catalog_title:
+            clean = catalog_title
+        source = (clean, inline_guests + guests, lookup_name != name, explicit)
+        expected.setdefault(equivalent_title_key(clean), []).append(source)
+        if duration_ms is not None:
+            core = RADIO_LABEL.sub("", clean).strip()
+            expected_radio.setdefault(equivalent_title_key(core), []).append(source)
+            if core != clean:
+                queries.append(f"{lead} {core}")
         if clean != name or lead != artist:
             queries.append(f"track:{clean} artist:{lead}")
         shorter = RELEASE_LABEL.sub("", SOUNDTRACK_LABEL.sub("", clean)).strip()
@@ -226,12 +271,22 @@ def recover_track(search, artist, names, candidates, duration_ms):
 
     full_title_matches = {}
     shortened_title_matches = {}
+    radio_matches = {}
     for track in candidates.values():
         track_duration = track.get("duration_ms")
         if duration_ms is not None and track_duration and abs(track_duration - duration_ms) > 3000:
             continue
         clean, guests = title_and_credits(track["name"])
         sources = expected.get(equivalent_title_key(clean))
+        alternate_radio = not sources and duration_ms is not None and track_duration and (
+            abs(track_duration - duration_ms) <= 900
+        )
+        if alternate_radio:
+            core = RADIO_LABEL.sub("", clean).strip()
+            sources = [
+                source for source in expected_radio.get(equivalent_title_key(core), ())
+                if bool(RADIO_LABEL.search(source[0])) != (core != clean)
+            ]
         if not sources:
             continue
         credits = {artist_key(entry["name"]) for entry in track["artists"]}
@@ -254,11 +309,36 @@ def recover_track(search, artist, names, candidates, duration_ms):
             if is_cover and artist_key(track["artists"][0]["name"]) != artist_key(lead):
                 continue
             if all(has_recovery_credit(guest, credits) for guest in (*source_guests, *guests)):
-                matches = (full_title_matches if full_title == tolerant_key(title_key(source_title))
-                           else shortened_title_matches)
+                if alternate_radio:
+                    matches = radio_matches
+                elif full_title == tolerant_key(title_key(source_title)) or (
+                    source_release and "remaster" in source_release[0].casefold()
+                    and (track_release := RELEASE_LABEL.search(clean))
+                    and "remaster" in track_release[0].casefold()
+                ):
+                    matches = full_title_matches
+                else:
+                    matches = shortened_title_matches
                 matches.setdefault(recording_key(track), track)
-    matches = full_title_matches or shortened_title_matches
+    matches = full_title_matches or shortened_title_matches or radio_matches
     return choose_recording(matches, duration_ms)
+
+
+def recover_verified_recording(search, artist, title, duration_ms):
+    if duration_ms is None:
+        return None
+    isrc = VERIFIED_RECORDINGS.get((artist_key(artist), tolerant_key(title)))
+    if not isrc:
+        return None
+    for track in search(f"isrc:{isrc}"):
+        if (track.get("external_ids", {}).get("isrc") == isrc
+                and track.get("duration_ms")
+                and abs(track["duration_ms"] - duration_ms) <= 2000
+                and track.get("is_playable") is not False
+                and track.get("available_markets", True)
+                and not track.get("restrictions")):
+            return track["uri"]
+    return None
 
 
 def find_track(api, artist, title, remix, *, duration_ms=None):
@@ -326,8 +406,10 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
                 lead_matches.setdefault(recording, item)
         if fallback is not None and index >= exact_query_count - 1:
             return prefer_clean(fallback, candidates.values())
-    if alias_matches:
-        return choose_recording(alias_matches, duration_ms)
-    if lead_matches:
-        return choose_recording(lead_matches, duration_ms)
-    return recover_track(search, artist, names, candidates, duration_ms)
+    if alias_matches or lead_matches:
+        matched = choose_recording(alias_matches or lead_matches, duration_ms)
+    else:
+        matched = recover_track(search, artist, names, candidates, duration_ms)
+    if matched or remix:
+        return matched
+    return recover_verified_recording(search, artist, title, duration_ms)

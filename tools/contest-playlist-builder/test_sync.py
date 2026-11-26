@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from sync import DIVISIONS, Spotify, SyncError, load_playlist_ids, source_lists, sync
+from sync import DIVISIONS, Spotify, SyncError, load_playlist_ids, matching_duration, source_lists, sync
 
 
 def history(artist, title, label):
@@ -78,6 +78,11 @@ class SyncTests(unittest.TestCase):
         self.assertEqual([call.kwargs["duration_ms"] for call in self.spotify.search.call_args_list],
                          [206000, 210000])
         self.sheets.write.assert_any_call("output", {"'All Star'!A2:B": refreshed[4]})
+
+    def test_matching_duration_allows_rounding_but_rejects_different_edits(self):
+        self.assertEqual(matching_duration({211000, 212000}), 211500)
+        self.assertIsNone(matching_duration({211000, 230000}))
+        self.assertIsNone(matching_duration(set()))
 
     def test_missing_competition_header_fails_before_output_writes(self):
         self.sheets.tabs.return_value = {"2026"}

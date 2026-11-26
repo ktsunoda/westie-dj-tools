@@ -222,6 +222,15 @@ def duration_milliseconds(value):
     return None
 
 
+def matching_duration(values):
+    if not values:
+        return None
+    shortest, longest = min(values), max(values)
+    if longest - shortest <= 1000:
+        return (shortest + longest) // 2
+    return None
+
+
 def source_lists(sheets, source, *, durations=None):
     years = sorted(name for name in sheets.tabs(source)
                    if re.fullmatch(r"[0-9]{4}", name) and int(name) >= 2012)
@@ -323,8 +332,7 @@ def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, sum
                 continue
             artist, title = row[:2]
             title = cell_text(title).strip()
-            timings = durations.get((cell_text(artist), title), ())
-            duration_ms = next(iter(timings)) if len(timings) == 1 else None
+            duration_ms = matching_duration(durations.get((cell_text(artist), title), ()))
             uri = spotify.search(artist, title, duration_ms=duration_ms)
             if uri:
                 tracks.append(uri)
