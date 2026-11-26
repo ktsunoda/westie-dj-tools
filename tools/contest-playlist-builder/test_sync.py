@@ -167,6 +167,31 @@ class SyncTests(unittest.TestCase):
         session.request.return_value.json.return_value = {"tracks": {"items": []}}
         self.assertIsNone(spotify.search("Artist", "Song (Album Version)"))
 
+    def test_catalog_fallback_requires_the_reviewed_release_and_recording(self):
+        session = Mock()
+        spotify = Spotify(session)
+        spotify.access_token = "test-token"
+        correct = {
+            "id": "1ko2lVN0vKGUl9zrU0qSlT", "uri": "spotify:track:1ko2lVN0vKGUl9zrU0qSlT",
+            "external_ids": {"isrc": "USEE19901162"}, "is_playable": True,
+        }
+        other_edit = {**correct, "id": "another-release", "uri": "spotify:track:another-release"}
+
+        def request(method, url, **kwargs):
+            response = Mock(ok=True)
+            query = kwargs["params"]["q"]
+            tracks = [other_edit, correct] if query == "isrc:USEE19901162" else []
+            response.json.return_value = {"tracks": {"items": tracks}}
+            return response
+
+        session.request.side_effect = request
+        artist = "Bill Withers & Grover Washingt"
+        with self.assertLogs(level="INFO"):
+            self.assertEqual(spotify.search(artist, "Just the Two of Us"), correct["uri"])
+        self.assertIsNone(spotify.search(artist, "Just the Two of Us (Acoustic)"))
+        correct["is_playable"] = False
+        self.assertIsNone(spotify.search(artist, "Just the Two of Us"))
+
     def test_spotify_search_uses_shared_matcher_and_preserves_version(self):
         session = Mock()
         spotify = Spotify(session)

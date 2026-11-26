@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from shared.spotify_matching import find_track
+from shared.spotify_matching import find_track, normalized
 
 DIVISIONS = {
     "Newcomer": ("newcomer",),
@@ -19,6 +19,14 @@ DIVISIONS = {
 }
 STATE = "'Spotify Sync State'"
 FAILED = "'Failed Searches'"
+# Use an alternate catalog cut only for reviewed source titles.
+CATALOG_FALLBACKS = {
+    ("bill withers & grover washingt", "just the two of us"): ("USEE19901162", "1ko2lVN0vKGUl9zrU0qSlT"),
+    ("dan barrett", "love potion #9 (cleaned)"): ("US89R0610493", "3oPfJnT3jMFixktiN6f9Oj"),
+    ("justin timberlake", "lovestoned"): ("USJI10600495", "5iyE2d4U3Vc5cqY9mPTlpy"),
+    ("salt-n-pepa", "shoop"): ("USV291488303", "1boZz3pZBwE6BG68RhioNn"),
+    ("usher", "more"): ("USLF21000098", "0aBKFfdyOD1Ttvgv0cfjjJ"),
+}
 LEGACY_TRACK_SUFFIXES = (
     r"\[feat\.[^\]]*\]",
     r"\(feat\.[^)]*\)",
@@ -172,9 +180,25 @@ class Spotify:
 
         artist = cell_text(artist)
         matched = find_track(api, artist, title, "", duration_ms=duration_ms)
-        if matched or not self.legacy_fallback:
+        if matched:
             return matched
 
+        fallback = CATALOG_FALLBACKS.get((normalized(artist), normalized(title)))
+        if fallback:
+            isrc, track_id = fallback
+            result = api("GET", "/search", params={"q": f"isrc:{isrc}", "type": "track", "limit": 10})
+            for track in result["tracks"]["items"]:
+                if (track.get("id") == track_id
+                        and track.get("external_ids", {}).get("isrc") == isrc
+                        and track.get("is_playable") is not False
+                        and track.get("available_markets", True)
+                        and not track.get("restrictions")
+                        and (not title.casefold().endswith("(cleaned)") or track.get("explicit") is False)):
+                    logging.info("Verified Spotify catalog fallback: %s — %s", artist, title)
+                    return track["uri"]
+
+        if not self.legacy_fallback:
+            return None
         legacy_title = legacy_search_title(title)
         if not legacy_title:
             return None
