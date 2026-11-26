@@ -71,6 +71,20 @@ def build_lists(rows):
 
 def checked_json(response, operation):
     if not response.ok:
+        if operation.startswith("Spotify") and response.status_code == 429:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            error = payload.get("error") if isinstance(payload, dict) else None
+            reason = error.get("reason") if isinstance(error, dict) else None
+            if not isinstance(reason, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", reason):
+                reason = "unknown"
+            retry_after = response.headers.get("Retry-After", "")
+            delay = f"{retry_after}s" if re.fullmatch(r"[0-9]{1,10}", retry_after) else "unknown"
+            raise SyncError(
+                f"{operation} failed (HTTP 429; reason={reason}; Retry-After={delay})."
+            )
         if operation.startswith("Spotify") and response.status_code in (400, 401, 403) and (
             operation == "Spotify token refresh" or response.status_code in (401, 403)
         ):
