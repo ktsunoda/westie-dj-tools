@@ -1,9 +1,9 @@
 from copy import deepcopy
 from unittest import TestCase
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from virtualdj import parse_m3u
-from westie_radio import Drive, HttpError, SyncError, request, sync
+from westie_radio import Drive, HttpError, Spotify, SyncError, request, sync
 
 
 PLAY = "#EXTVDJ:<artist>SOFI TUKKER & Silva</artist><title>Café (Radio Edit)</title><remix>Live</remix><songlength>201.732</songlength>\r\n/music/Café.m4a\r\n"
@@ -185,3 +185,14 @@ class SyncTests(TestCase):
         sync(self.drive, self.spotify)
         self.assertEqual(self.spotify.uris, [str(n) for n in range(199)] + ["repeat"])
         self.assertNotIn("pending", self.drive.state)
+
+
+
+class SpotifyIntegrationTests(TestCase):
+    @patch("westie_radio.find_track", return_value="spotify:track:match")
+    def test_search_passes_play_metadata_to_shared_matcher(self, find_track):
+        spotify = Spotify(Mock(), "playlist")
+        artist, title, remix = "Artist", "Song", "Radio Edit"
+
+        self.assertEqual(spotify.search(artist, title, remix), "spotify:track:match")
+        find_track.assert_called_once_with(spotify.api, artist, title, remix)
