@@ -19,6 +19,17 @@ DIVISIONS = {
 }
 STATE = "'Spotify Sync State'"
 FAILED = "'Failed Searches'"
+LEGACY_TRACK_SUFFIXES = (
+    r"\[feat\.[^\]]*\]",
+    r"\(feat\.[^)]*\)",
+    r"\(radio edit\)",
+    r"\(album version\)",
+    r"\(original song[^)]*\)",
+    r"\(clean edit\)",
+    r"\(cleaned\)",
+    r"\(explicit\)",
+    r"\(remastered\)",
+)
 
 
 class SyncError(Exception):
@@ -69,6 +80,12 @@ def build_lists(rows):
     return lists, sorted(labels, key=lambda label: label.encode("utf-16-be"))
 
 
+def legacy_search_title(title):
+    for pattern in LEGACY_TRACK_SUFFIXES:
+        title = re.sub(r"\s*" + pattern, "", title, count=1, flags=re.IGNORECASE)
+    return title.strip()
+
+
 def checked_json(response, operation):
     if not response.ok:
         if operation.startswith("Spotify") and response.status_code in (400, 401, 403) and (
@@ -95,12 +112,12 @@ class Sheets:
                             params={"fields": "sheets(properties(title))"})
         return {sheet["properties"]["title"] for sheet in data["sheets"]}
 
-    def read(self, spreadsheet, ranges):
+    def read(self, spreadsheet, ranges, *, render_option="UNFORMATTED_VALUE"):
         if not ranges:
             return []
         data = self.request(
             spreadsheet, "GET", "/values:batchGet", "Read Sheets values",
-            params={"ranges": ranges, "valueRenderOption": "UNFORMATTED_VALUE"},
+            params={"ranges": ranges, "valueRenderOption": render_option},
         )
         return [item.get("values", []) for item in data["valueRanges"]]
 
@@ -124,8 +141,9 @@ class Sheets:
 
 
 class Spotify:
-    def __init__(self, session):
+    def __init__(self, session, *, legacy_fallback=False):
         self.session = session
+        self.legacy_fallback = legacy_fallback
         self.access_token = None
 
     def authorize(self):
@@ -152,7 +170,22 @@ class Spotify:
         def api(method, path, **kwargs):
             return self.request(method, path.lstrip("/"), "Spotify track search", **kwargs)
 
-        return find_track(api, cell_text(artist), title, "")
+        artist = cell_text(artist)
+        matched = find_track(api, artist, title, "")
+        if matched or not self.legacy_fallback:
+            return matched
+
+        legacy_title = legacy_search_title(title)
+        if not legacy_title:
+            return None
+        result = api("GET", "/search", params={
+            "q": f"track:{legacy_title} artist:{artist}", "type": "track", "limit": 1,
+        })
+        candidates = result["tracks"]["items"]
+        if not candidates:
+            return None
+        logging.info("Legacy Spotify fallback: %s — %s", artist, title)
+        return candidates[0]["uri"]
 
     def add(self, playlist, tracks):
         for start in range(0, len(tracks), 100):
@@ -203,12 +236,24 @@ def source_lists(sheets, source):
             letters = chr(ord("A") + remainder) + letters
         ranges.append(f"'{year}'!A2:{letters}")
 
-    rows = (
-        (row[0], row[1] if len(row) > 1 else "", row[column])
-        for column, tab in zip(competition_columns, sheets.read(source, ranges))
-        for row in tab
-        if row and len(row) > column
-    )
+    rows = []
+    numeric_titles = []
+    for year, column, tab in zip(years, competition_columns, sheets.read(source, ranges)):
+        for index, row in enumerate(tab, 2):
+            if len(row) <= column:
+                continue
+            artist, title = (row + [""])[:2]
+            label = row[column]
+            if artist and isinstance(label, str) and label.strip() and type(title) in (int, float):
+                numeric_titles.append((len(rows), f"'{year}'!B{index}"))
+            rows.append((artist, title, label))
+    if numeric_titles:
+        displayed = sheets.read(source, [address for _, address in numeric_titles],
+                                render_option="FORMATTED_VALUE")
+        for (index, _), cells in zip(numeric_titles, displayed):
+            if cells and cells[0]:
+                artist, _, label = rows[index]
+                rows[index] = artist, cells[0][0], label
     return build_lists(rows)
 
 
@@ -287,7 +332,8 @@ def main():
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         with AuthorizedSession(credentials) as google, requests.Session() as spotify:
-            sync(Sheets(google), Spotify(spotify), os.environ["SOURCE_SHEET_ID"],
+            matcher = Spotify(spotify, legacy_fallback=os.environ.get("SPOTIFY_LEGACY_FALLBACK") == "true")
+            sync(Sheets(google), matcher, os.environ["SOURCE_SHEET_ID"],
                  os.environ["OUTPUT_SHEET_ID"], playlist_ids=playlist_ids,
                  check=args.check, summary=args.summary)
     except KeyError as error:

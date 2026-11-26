@@ -5,6 +5,7 @@ Copyright (c) 2026 Koichi Tsunoda. Licensed under MIT.
 """
 
 import re
+import unicodedata
 
 FEATURED = re.compile(r"\s*\((?:feat\.?|ft\.?|featuring)\s+([^()]+)\)", re.I)
 CREDIT_SEPARATOR = re.compile(r"\s*[,;]\s*|\s+(?:&|and|x)\s+", re.I)
@@ -17,6 +18,47 @@ TRACKING_ROOM = re.compile(
     r"(?:\s*\(nashville['’]?s tracking room studios\)|"
     r"\s+-\s+recorded at the tracking room nashville)$", re.I
 )
+
+CREDIT_SUFFIX = re.compile(
+    r"\s*(?:\((?:feat\.|ft\.|(?:feat|ft|featuring|with|duet with)\s+)\s*([^()]+)\)"
+    r"|\[(?:feat\.|ft\.|(?:feat|ft|featuring|with|duet with)\s+)\s*([^\[\]]+)\])", re.I,
+)
+INLINE_FEATURED = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s+", re.I)
+ALBUM_LABEL = re.compile(r"\s*(?:\(album version\)|\[album version\]| - album version)$", re.I)
+SOUNDTRACK_LABEL = re.compile(
+    r'\s*(?:[\[(]|\s+-\s+)'
+    r'(?:original song\s+)?from\s*(?:the\s+)?'
+    r'(?:original motion picture\s+|dreamworks animation[\'’]s\s+)?'
+    r'[“"”].+[“"”]\s*(?:soundtrack(?:\s+version)?|an hbo original series)?[\])]?$',
+    re.I,
+)
+COVER_LABEL = re.compile(r"\s*[\[(][^()[\]]+\s+cover[\])]$", re.I)
+COVER_VERSION = re.compile(
+    r"\b(?:acoustic|live|remix|mix|edit|version|instrumental|karaoke|clean|explicit|"
+    r"stripped|remaster(?:ed)?|unplugged|demo)\b", re.I,
+)
+LIVE_LOCATION = re.compile(
+    r"\s+(?:live (?:from|at)|recorded at)\s+(?:the\s+)?"
+    r"(spotify studios\b.*|late show with\b.*)$", re.I,
+)
+QUERY_SUFFIX = re.compile(r"\s*(?:\([^()]*\)|\[[^\[\]]*\]|\s+-\s+[^-]+)$")
+RECOVERY_WORDS = {
+    "one": "1", "two": "2", "ii": "2", "three": "3", "u": "you",
+}
+CATALOG_ARTIST_ALIASES = {
+    "grace gaustad": ("Gaustad", "5MZxzpsn1zTTkiYwQ9Qz9b"),
+    "kenny blues boss wayne": ('Kenny "Blue Boss" Wayne', "1X7dEf0PnxVCeaIfMXyanb"),
+}
+ARTIST_ALIASES = {
+    "black eyed peas": "the black eyed peas",
+    "isaiah": "isaiah firebrace",
+    "janet": "janet jackson",
+    "ke ha": "kesha",
+    "keb mo": "kebmo",
+    "ms lauryn hill": "lauryn hill",
+    "ol db": "ol dirty bastard",
+    "t mills": "travis mills",
+}
 
 
 def normalized(value):
@@ -35,6 +77,143 @@ def credits_match(credit, artists):
         return True
     names = [normalized(name) for name in CREDIT_SEPARATOR.split(credit)]
     return len(names) > 1 and all(name in artists for name in names)
+
+
+def tolerant_key(text):
+    folded = unicodedata.normalize("NFKD", text.casefold())
+    folded = "".join(char for char in folded
+                     if not unicodedata.combining(char) and char not in "'’")
+    return " ".join(re.sub(r"[^\w]+", " ", folded).split())
+
+
+def artist_key(name):
+    key = tolerant_key(name)
+    if re.fullmatch(r"(?:[a-z] ){2,}[a-z]", key):
+        key = key.replace(" ", "")
+    return ARTIST_ALIASES.get(key, key)
+
+
+def title_and_credits(title):
+    credits = [first or second for first, second in CREDIT_SUFFIX.findall(title)]
+    clean, *inline = INLINE_FEATURED.split(CREDIT_SUFFIX.sub("", title), maxsplit=1)
+    clean = ALBUM_LABEL.sub("", clean).strip()
+    return clean, credits + inline
+
+
+def recovery_title_key(title):
+    return tolerant_key(title_key(SOUNDTRACK_LABEL.sub("", title).strip()))
+
+
+def equivalent_title_key(title):
+    key = recovery_title_key(title)
+    words = LIVE_LOCATION.sub(r" live \1", key).split()
+    if "ii" in words and "u" in words:
+        words = ["to" if word == "ii" else word for word in words]
+    return " ".join(RECOVERY_WORDS.get(word, word) for word in words)
+
+
+def has_recovery_credit(credit, artists):
+    if artist_key(credit) in artists:
+        return True
+    names = re.split(r"\s+with\s+", credit, flags=re.I)
+    names = [name for part in names for name in CREDIT_SEPARATOR.split(part)]
+    return len(names) > 1 and all(artist_key(name) in artists for name in names)
+
+
+def recording_key(track):
+    return (track.get("external_ids", {}).get("isrc")
+            or track.get("linked_from", {}).get("uri") or track["uri"])
+
+
+def is_clean_counterpart(clean, explicit):
+    if clean.get("explicit") is not False or explicit.get("explicit") is not True:
+        return False
+    if not clean.get("duration_ms") or clean["duration_ms"] != explicit.get("duration_ms"):
+        return False
+    if title_key(clean["name"]) != title_key(explicit["name"]):
+        return False
+    return ([a.get("id") or artist_key(a["name"]) for a in clean["artists"]]
+            == [a.get("id") or artist_key(a["name"]) for a in explicit["artists"]])
+
+
+def choose_recording(matches):
+    if len(matches) == 1:
+        return next(iter(matches.values()))["uri"]
+    if len(matches) == 2:
+        first, second = matches.values()
+        if is_clean_counterpart(first, second):
+            return first["uri"]
+        if is_clean_counterpart(second, first):
+            return second["uri"]
+    return None
+
+
+def prefer_clean(track, candidates):
+    if track.get("explicit") is True:
+        for candidate in candidates:
+            if is_clean_counterpart(candidate, track):
+                return candidate["uri"]
+    return track["uri"]
+
+
+def recover_track(search, artist, names, candidates):
+    lead, *inline_guests = INLINE_FEATURED.split(artist, maxsplit=1)
+    expected = {}
+    queries = []
+    for name in names:
+        cover = COVER_LABEL.search(name)
+        lookup_name = name[:cover.start()].strip() if cover and not COVER_VERSION.search(cover[0]) else name
+        clean, guests = title_and_credits(lookup_name)
+        expected.setdefault(equivalent_title_key(clean), []).append(
+            (tolerant_key(title_key(clean)), inline_guests + guests, lookup_name != name)
+        )
+        if clean != name or lead != artist:
+            queries.append(f"track:{clean} artist:{lead}")
+        shorter = SOUNDTRACK_LABEL.sub("", clean).strip()
+        if shorter != clean:
+            queries.append(f"track:{shorter} artist:{lead}")
+        key = recovery_title_key(clean)
+        equivalent = equivalent_title_key(clean)
+        first_artist = CREDIT_SEPARATOR.split(lead, maxsplit=1)[0]
+        if lookup_name != name or key != equivalent:
+            query_title = clean if lookup_name != name else equivalent
+            queries.append(f"{query_title} {first_artist}")
+        elif guests or inline_guests:
+            core = QUERY_SUFFIX.sub("", clean).strip() or clean
+            queries.append(" ".join((first_artist, *inline_guests, *guests, core)))
+        catalog_alias = CATALOG_ARTIST_ALIASES.get(artist_key(lead))
+        if catalog_alias:
+            catalog_artist, _ = catalog_alias
+            queries.append(f"{catalog_artist} {clean}")
+
+    for query in dict.fromkeys(queries):
+        for track in search(query):
+            candidates[track["uri"]] = track
+
+    full_title_matches = {}
+    shortened_title_matches = {}
+    for track in candidates.values():
+        clean, guests = title_and_credits(track["name"])
+        sources = expected.get(equivalent_title_key(clean))
+        if not sources:
+            continue
+        credits = {artist_key(entry["name"]) for entry in track["artists"]}
+        artist_ids = {entry.get("id") for entry in track["artists"]}
+        credits.update(
+            alias for alias, (_, artist_id) in CATALOG_ARTIST_ALIASES.items()
+            if artist_id in artist_ids
+        )
+        if not has_recovery_credit(lead, credits):
+            continue
+        full_title = tolerant_key(title_key(clean))
+        for source_title, source_guests, is_cover in sources:
+            if is_cover and artist_key(track["artists"][0]["name"]) != artist_key(lead):
+                continue
+            if all(has_recovery_credit(guest, credits) for guest in (*source_guests, *guests)):
+                matches = full_title_matches if full_title == source_title else shortened_title_matches
+                matches.setdefault(recording_key(track), track)
+    matches = full_title_matches or shortened_title_matches
+    return choose_recording(matches)
 
 
 def find_track(api, artist, title, remix):
@@ -65,39 +244,45 @@ def find_track(api, artist, title, remix):
         queries.extend((f"track:{clean} artist:{artist}", f"track:{clean} artist:{lead}"))
     queries.extend(f"{FEATURED.sub('', name)} {artist}" for name in names)
 
+    search_results = {}
+
+    def search(query):
+        if query not in search_results:
+            search_results[query] = api(
+                "GET", "/search", params={"q": query, "type": "track", "limit": 10},
+            )["tracks"]["items"]
+        return search_results[query]
+
     fallback = None
+    candidates = {}
     alias_matches = {}
     lead_matches = {}
     source_credit = normalized(artist)
     allow_lead_match = lead != artist or bool(featured)
     lead_credit = normalized(lead)
     for index, query in enumerate(dict.fromkeys(queries)):
-        results = api(
-            "GET", "/search",
-            params={"q": query, "type": "track", "limit": 10},
-        )["tracks"]["items"]
-        for item in results:
+        items = search(query)
+        for item in items:
+            candidates[item["uri"]] = item
             artists = {normalized(entry["name"]) for entry in item["artists"]}
             if normalized(item["name"]) in exact_titles and normalized(artist) in artists:
-                return item["uri"]
+                return prefer_clean(item, items)
             if title_key(item["name"]) not in title_keys:
                 continue
             if (fallback is None and credits_match(artist, artists)
                     and all(credits_match(name, artists) for name in featured)):
-                fallback = item["uri"]
-            uri = item["uri"]
-            recording = (item.get("external_ids", {}).get("isrc")
-                         or item.get("linked_from", {}).get("uri") or uri)
+                fallback = item
+            recording = recording_key(item)
             aliases = {alias.strip() for name in artists
                        for alias in re.findall(r"\(([^()]+)\)$", name)}
             if source_credit in aliases and all(credits_match(name, artists) for name in featured):
-                alias_matches.setdefault(recording, uri)
+                alias_matches.setdefault(recording, item)
             if allow_lead_match and lead_credit in artists:
-                lead_matches.setdefault(recording, uri)
+                lead_matches.setdefault(recording, item)
         if fallback is not None and index >= exact_query_count - 1:
-            return fallback
+            return prefer_clean(fallback, candidates.values())
     if alias_matches:
-        return next(iter(alias_matches.values())) if len(alias_matches) == 1 else None
-    if len(lead_matches) == 1:
-        return next(iter(lead_matches.values()))
-    return None
+        return choose_recording(alias_matches)
+    if lead_matches:
+        return choose_recording(lead_matches)
+    return recover_track(search, artist, names, candidates)

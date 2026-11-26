@@ -51,6 +51,20 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(labels, ["Novice"])
         self.sheets.read.assert_called_with("source", ["'2025'!A2:K", "'2026'!A2:J"])
 
+    def test_source_uses_displayed_text_for_time_formatted_title(self):
+        self.sheets.tabs.return_value = {"2026"}
+        header = ["Artist", "Title", *[""] * 7, "Competition", "Spotify"]
+        self.sheets.read.side_effect = [
+            [[header]],
+            [[["Matt Wertz", 0.22152777777777777, *[""] * 7, "Novice"]]],
+            [[["5:19"]]],
+        ]
+        lists, _ = source_lists(self.sheets, "source")
+        self.assertEqual(lists["Novice"], [["Matt Wertz", "5:19"]])
+        self.sheets.read.assert_called_with(
+            "source", ["'2026'!B2"], render_option="FORMATTED_VALUE",
+        )
+
     def test_missing_competition_header_fails_before_output_writes(self):
         self.sheets.tabs.return_value = {"2026"}
         self.sheets.read.return_value = [[["Artist", "Title", "Spotify"]]]
@@ -102,6 +116,37 @@ class SyncTests(unittest.TestCase):
             sync(self.sheets, self.spotify, "source", "output")
         self.sheets.tabs.assert_not_called()
         self.sheets.write.assert_not_called()
+
+    def test_legacy_search_is_opt_in_and_preserves_existing_match(self):
+        session = Mock()
+        spotify = Spotify(session, legacy_fallback=True)
+        spotify.access_token = "test-token"
+        session.request.return_value.json.return_value = {"tracks": {"items": [
+            {"uri": "spotify:track:correct", "name": "Song (Radio Edit)",
+             "artists": [{"name": "Artist"}]},
+        ]}}
+        self.assertEqual(spotify.search("Artist", "Song (Radio Edit)"), "spotify:track:correct")
+        session.request.assert_called_once()
+
+        session.reset_mock()
+        session.request.return_value.json.return_value = {"tracks": {"items": [
+            {"uri": "spotify:track:album", "name": "Song",
+             "artists": [{"name": "Artist"}]},
+        ]}}
+        strict = Spotify(session)
+        strict.access_token = "test-token"
+        self.assertIsNone(strict.search("Artist", "Song (Radio Edit)"))
+        with self.assertLogs(level="INFO"):
+            self.assertEqual(spotify.search("Artist", "Song (Radio Edit)"), "spotify:track:album")
+        self.assertEqual(session.request.call_args.kwargs["params"],
+                         {"q": "track:Song artist:Artist", "type": "track", "limit": 1})
+
+    def test_legacy_search_returns_none_for_empty_candidate_list(self):
+        session = Mock()
+        spotify = Spotify(session, legacy_fallback=True)
+        spotify.access_token = "test-token"
+        session.request.return_value.json.return_value = {"tracks": {"items": []}}
+        self.assertIsNone(spotify.search("Artist", "Song (Album Version)"))
 
     def test_spotify_search_uses_shared_matcher_and_preserves_version(self):
         session = Mock()
