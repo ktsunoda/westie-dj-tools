@@ -8,7 +8,7 @@ import re
 from collections import Counter
 from datetime import datetime
 
-from shared.spotify_matching import find_track
+from spotify_search import TrackOverrides, find_track
 from virtualdj import parse_m3u
 
 LOG = logging.getLogger(__name__)
@@ -102,16 +102,19 @@ class Drive:
 
 
 class Spotify:
-    def __init__(self, session, playlist):
+    def __init__(self, session, playlist, overrides=None):
         self.session = session
         self.playlist = playlist
+        self.overrides = overrides
         self.path = f"/playlists/{playlist}"
 
     def api(self, method, path, **kwargs):
         return request(self.session, "Spotify", method, SPOTIFY + path, **kwargs).json()
 
     def search(self, artist, title, remix):
-        return find_track(self.api, artist, title, remix)
+        if self.overrides is None:
+            return find_track(self.api, artist, title, remix)
+        return find_track(self.api, artist, title, remix, overrides=self.overrides.load())
 
     def snapshot(self):
         return self.api("GET", self.path, params={"fields": "snapshot_id"})["snapshot_id"]
@@ -204,7 +207,9 @@ def trim(drive, spotify, state, counts):
         current = updated
 
 
-def sync(drive, spotify):
+def sync(drive, spotify, *, overrides=None):
+    if overrides is not None:
+        overrides.load()
     state = checkpoint(drive, spotify.playlist)
     reconcile(drive, spotify, state)
     files = drive.histories()
@@ -254,6 +259,8 @@ def sync(drive, spotify):
         if uri:
             batch.append(uri)
         else:
+            if overrides is not None:
+                overrides.record_miss(artist, title)
             counts["unmatched"] += 1
         if len(batch) == 100:
             flush()
@@ -309,7 +316,8 @@ def main():
                 data={"grant_type": "refresh_token", "refresh_token": os.environ["SPOTIFY_REFRESH_TOKEN"]},
             ).json()["access_token"]
             session.headers["Authorization"] = f"Bearer {token}"
-            sync(drive, Spotify(session, playlist))
+            overrides = TrackOverrides.from_env(writer)
+            sync(drive, Spotify(session, playlist, overrides), overrides=overrides)
         return 0
     except SyncError as error:
         LOG.error("%s", error)

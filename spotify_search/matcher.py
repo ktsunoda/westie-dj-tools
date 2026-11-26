@@ -7,6 +7,8 @@ Copyright (c) 2026 Koichi Tsunoda. Licensed under MIT.
 import re
 import unicodedata
 
+from .overrides import override_uri
+
 FEATURED = re.compile(r"\s*\((?:feat\.?|ft\.?|featuring)\s+([^()]+)\)", re.I)
 CREDIT_SEPARATOR = re.compile(r"\s*[,;]\s*|\s+(?:&|and|x)\s+", re.I)
 VERSION_SUFFIX = re.compile(
@@ -14,11 +16,6 @@ VERSION_SUFFIX = re.compile(
     r"[^()[\]]*)[\])]$",
     re.I,
 )
-TRACKING_ROOM = re.compile(
-    r"(?:\s*\(nashville['’]?s tracking room studios\)|"
-    r"\s+-\s+recorded at the tracking room nashville)$", re.I
-)
-
 CREDIT_SUFFIX = re.compile(
     r"\s*(?:\((?:feat\.|ft\.|(?:feat|ft|featuring|with|duet with)\s+)\s*([^()]+)\)"
     r"|\[(?:feat\.|ft\.|(?:feat|ft|featuring|with|duet with)\s+)\s*([^\[\]]+)\])", re.I,
@@ -39,8 +36,11 @@ RELEASE_LABEL = re.compile(
     r"(?:[\])]$|$)", re.I,
 )
 EDIT_LABEL = re.compile(r"\s*(?:[\[(]|\s+-\s+)(?:radio|short) edit[\])]?$", re.I)
+LOCAL_EDIT_LABEL = re.compile(r"\s*(?:\(contest partial edit\)|\[contest partial edit\]| - contest partial edit)$", re.I)
+ACOUSTIC_LABEL = re.compile(r"\s*(?:\(acoustic(?: version)?\)|\[acoustic(?: version)?\]| - acoustic(?: version)?)$", re.I)
+ACOUSTIC_ALBUM = re.compile(r"\bacoustic(?: version)?$", re.I)
 CONTENT_LABEL = re.compile(
-    r"\s*(?:[\[(]|\s+-\s+)(clean(?: version)?|explicit(?: version)?)"
+    r"\s*(?:[\[(]|\s+-\s+)(clean(?: version| edit)?|explicit(?: version)?)"
     r"(?:[\])]$|$)", re.I,
 )
 COVER_VERSION = re.compile(
@@ -64,30 +64,8 @@ CATALOG_ARTIST_ALIASES = {
     "martha and the vandellas": ("Martha Reeves & The Vandellas", "1Pe5hlKMCTULjosqZ6KanP"),
     "mikolas josef": ("MIKOLAS", "6Kz7MXIUFMtp5Ts91lagtR"),
     "q": ("Q Marsden", "22vqVhfPJab5kkU9txDGX3"),
+    "r o": ("RUGI", "3TywsrRz1pBseLa6jNpq73"),
     "scott bradlees postmodern jukebox": ("Postmodern Jukebox", "5HYNPEO2NNBONQkp3Mvwvc"),
-}
-TITLE_ALIASES = {
-    ("britney spears", "one more time"): "...Baby One More Time",
-    ("nath brooks", "redbone"): "Redbone (Stay Woke)",
-    ("syml", "dim recorded at st marks cathedral"): "Dim - Recorded Live at St. Mark's Cathedral, Seattle",
-    ("syml", "fear of water"): "Fear of the Water",
-    ("the script", "breakeven falling to pieces"): "Breakeven",
-    ("the temptations", "aint to proud to beg"): "Ain't Too Proud To Beg",
-}
-# Exact source credits for recordings verified against a named release.
-# These are fallbacks for title search ambiguity, not alternate versions.
-VERIFIED_RECORDINGS = {
-    ("aretha franklin", "baby i love you"): "USAT20801258",
-    ("aretha franklin", "swanee remastered"): "USSM10600759",
-    ("arlene zelina", "together again"): "TCAFS2104639",
-    ("bob seger the silver bullet band", "old time rock and roll"): "USCA28600270",
-    ("britney spears", "one more time"): "USJI19810404",
-    ("c c music factory", "gonna make you sweat everybody dance now"): "USSM19000533",
-    ("eva cassidy", "wade in the water"): "USA449845002",
-    ("frank sinatra", "fly me to the moon feat count basie and his orchestra"): "USRH10800836",
-    ("john mayer", "free fallin live"): "USSM10801204",
-    ("julia sheer", "misery acoustic version feat eppic"): "GBDMT1200277",
-    ("stevie wonder", "signed sealed delivered im yours"): "USMO17082643",
 }
 ARTIST_ALIASES = {
     "jj grey and mofro": "jj grey mofro",
@@ -112,7 +90,7 @@ def title_key(title):
     # Spotify uses both parentheses and a dash around the same version label.
     title = FEATURED.sub("", title)
     title = VERSION_SUFFIX.sub(r" - \1", title)
-    return normalized(TRACKING_ROOM.sub(" - tracking room nashville", title))
+    return normalized(title)
 
 
 def credits_match(credit, artists):
@@ -156,8 +134,6 @@ def recovery_title_key(title):
 def equivalent_title_key(title):
     key = recovery_title_key(title)
     words = LIVE_LOCATION.sub(r" live \1", key).split()
-    if "ii" in words and "u" in words:
-        words = ["to" if word == "ii" else word for word in words]
     return " ".join(RECOVERY_WORDS.get(word, word) for word in words)
 
 
@@ -233,6 +209,8 @@ def recover_track(search, artist, names, candidates, duration_ms):
     lead, *inline_guests = INLINE_FEATURED.split(artist, maxsplit=1)
     expected = {}
     expected_edit = {}
+    expected_local_edit = {}
+    expected_acoustic = {}
     queries = []
     for name in names:
         cover = COVER_LABEL.search(name)
@@ -243,15 +221,20 @@ def recover_track(search, artist, names, candidates, duration_ms):
         if content:
             explicit = content[1].casefold().startswith("explicit")
             clean = clean[:content.start()].strip()
-        catalog_title = TITLE_ALIASES.get((artist_key(lead), tolerant_key(clean)))
-        if catalog_title:
-            clean = catalog_title
         source = (clean, inline_guests + guests, lookup_name != name, explicit)
         expected.setdefault(equivalent_title_key(clean), []).append(source)
         core = EDIT_LABEL.sub("", clean).strip()
         expected_edit.setdefault(equivalent_title_key(core), []).append(source)
         if core != clean:
             queries.append(f"{lead} {core}")
+        local_base = LOCAL_EDIT_LABEL.sub("", clean).strip()
+        if local_base != clean:
+            expected_local_edit.setdefault(equivalent_title_key(local_base), []).append(source)
+            queries.append(f"{lead} {local_base}")
+        acoustic_base = ACOUSTIC_LABEL.sub("", clean).strip()
+        if acoustic_base != clean:
+            expected_acoustic.setdefault(equivalent_title_key(acoustic_base), []).append(source)
+            queries.append(f"track:{acoustic_base} artist:{lead} album:acoustic")
         if clean != name or lead != artist:
             queries.append(f"track:{clean} artist:{lead}")
         shorter = RELEASE_LABEL.sub("", SOUNDTRACK_LABEL.sub("", clean)).strip()
@@ -277,17 +260,25 @@ def recover_track(search, artist, names, candidates, duration_ms):
 
     full_title_matches = {}
     shortened_title_matches = {}
+    acoustic_matches = {}
     edit_matches = {}
     for track in candidates.values():
         clean, guests = title_and_credits(track["name"])
-        sources = expected.get(equivalent_title_key(clean))
-        alternate_edit = not sources
-        if alternate_edit:
+        title = equivalent_title_key(clean)
+        sources = expected.get(title)
+        inferred_matches = None
+        if not sources and ACOUSTIC_ALBUM.search(track.get("album", {}).get("name", "")):
+            sources = expected_acoustic.get(title)
+            if sources:
+                inferred_matches = acoustic_matches
+        if not sources:
             core = EDIT_LABEL.sub("", clean).strip()
             sources = [
                 source for source in expected_edit.get(equivalent_title_key(core), ())
                 if bool(EDIT_LABEL.search(source[0])) != (core != clean)
             ]
+            sources.extend(expected_local_edit.get(title, ()))
+            inferred_matches = edit_matches
         if not sources:
             continue
         credits = {artist_key(entry["name"]) for entry in track["artists"]}
@@ -310,8 +301,8 @@ def recover_track(search, artist, names, candidates, duration_ms):
             if is_cover and artist_key(track["artists"][0]["name"]) != artist_key(lead):
                 continue
             if all(has_recovery_credit(guest, credits) for guest in (*source_guests, *guests)):
-                if alternate_edit:
-                    matches = edit_matches
+                if inferred_matches is not None:
+                    matches = inferred_matches
                 elif full_title == tolerant_key(title_key(source_title)) or (
                     source_release and "remaster" in source_release[0].casefold()
                     and (track_release := RELEASE_LABEL.search(clean))
@@ -321,26 +312,20 @@ def recover_track(search, artist, names, candidates, duration_ms):
                 else:
                     matches = shortened_title_matches
                 matches.setdefault(recording_key(track), track)
-    matches = full_title_matches or shortened_title_matches or edit_matches
+    matches = full_title_matches or shortened_title_matches or acoustic_matches or edit_matches
     return choose_recording(matches, duration_ms)
 
 
-def recover_verified_recording(search, artist, title):
-    isrc = VERIFIED_RECORDINGS.get((artist_key(artist), tolerant_key(title)))
-    if not isrc:
-        return None
-    for track in search(f"isrc:{isrc}"):
-        if track.get("external_ids", {}).get("isrc") == isrc:
-            return track["uri"]
-    return None
-
-
-def find_track(api, artist, title, remix, *, duration_ms=None):
+def find_track(api, artist, title, remix, *, duration_ms=None, overrides=None, original_title=None):
     """Return a matching Spotify track URI, or None if no match is found.
 
     The caller supplies an authenticated api(method, path, **kwargs) function.
     Pass an empty string when the source has no separate remix field.
     """
+    if overrides is not None:
+        uri = override_uri(overrides, artist, title if original_title is None else original_title)
+        if uri:
+            return uri
     # VirtualDJ can put the same version in both title and remix fields.
     if remix:
         base = re.sub(
@@ -412,9 +397,5 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
         if fallback is not None and index >= exact_query_count - 1:
             return prefer_clean(fallback, candidates.values())
     if alias_matches or lead_matches:
-        matched = choose_recording(alias_matches or lead_matches, duration_ms)
-    else:
-        matched = recover_track(search, artist, names, candidates, duration_ms)
-    if matched or remix:
-        return matched
-    return recover_verified_recording(search, artist, title)
+        return choose_recording(alias_matches or lead_matches, duration_ms)
+    return recover_track(search, artist, names, candidates, duration_ms)

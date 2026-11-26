@@ -10,6 +10,7 @@ from google.auth.transport.requests import AuthorizedSession
 from google.oauth2.service_account import Credentials
 
 from google_outputs import DriveFolder, HistorySheet
+from spotify_search import TrackOverrides
 from spotify_output import SETTINGS, SpotifyPlaylist
 from workflow import run_workflows
 
@@ -28,7 +29,8 @@ def main():
             history = HistorySheet(session, os.environ["DJ_SET_SPREADSHEET_ID"])
             outputs = {"DH": history}
             if any(os.environ.get(name) for name in SETTINGS):
-                outputs["SP"] = SpotifyPlaylist(stack.enter_context(Session()))
+                overrides = TrackOverrides.from_env(session)
+                outputs["SP"] = SpotifyPlaylist(stack.enter_context(Session()), overrides)
             spotify = outputs.get("SP")
             return run_workflows(
                 list(drive.files()), drive.download, drive.rename, outputs,

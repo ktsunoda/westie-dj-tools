@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from shared.spotify_matching import find_track, is_available, normalized
+from spotify_search import TrackOverrides, find_track, is_available, normalized
 
 DIVISIONS = {
     "Newcomer": ("newcomer",),
@@ -149,9 +149,10 @@ class Sheets:
 
 
 class Spotify:
-    def __init__(self, session, *, legacy_fallback=False):
+    def __init__(self, session, *, legacy_fallback=False, overrides=None):
         self.session = session
         self.legacy_fallback = legacy_fallback
+        self.overrides = overrides
         self.access_token = None
 
     def authorize(self):
@@ -180,7 +181,10 @@ class Spotify:
 
         artist = cell_text(artist)
         search_title = re.sub(r"\s*\(explicit\)$", "", title, flags=re.IGNORECASE).strip() or title
-        matched = find_track(api, artist, search_title, "", duration_ms=duration_ms)
+        matched = find_track(
+            api, artist, search_title, "", duration_ms=duration_ms, original_title=title,
+            overrides=self.overrides.load() if self.overrides is not None else None,
+        )
         if matched:
             return matched
 
@@ -312,7 +316,7 @@ def source_lists(sheets, source, *, durations=None):
     return build_lists(rows)
 
 
-def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, summary=False):
+def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, summary=False, overrides=None):
     if not (check or summary) and playlist_ids is None:
         raise SyncError("Spotify playlist targets are required for sync.")
     durations = {}
@@ -324,9 +328,7 @@ def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, sum
         return
 
     ranges = {division: f"'{division}'!A2:B" for division in DIVISIONS}
-    state_rows, *division_rows, _ = sheets.read(
-        output, [f"{STATE}!A:B", *ranges.values(), f"{FAILED}!A1"],
-    )
+    state_rows, *division_rows = sheets.read(output, [f"{STATE}!A:B", *ranges.values()])
     counters = read_counters(state_rows)
     for division, old in zip(DIVISIONS, division_rows):
         _, last = counters[division]
@@ -341,6 +343,8 @@ def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, sum
     if check:
         return
 
+    if overrides is not None:
+        overrides.load()
     sheets.write(output, {ranges[division]: rows for division, rows in lists.items() if rows})
     # Re-read so existing tail rows are retained, as with Apps Script's in-place writes.
     refreshed = sheets.read(output, list(ranges.values()))
@@ -361,7 +365,11 @@ def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, sum
                 tracks.append(uri)
             else:
                 failures.append([division, artist, title, datetime.now(timezone.utc).isoformat()])
-        sheets.append_failures(output, failures)
+        if overrides is None:
+            sheets.append_failures(output, failures)
+        else:
+            for _, artist, title, _ in failures:
+                overrides.record_miss(cell_text(artist), title)
         spotify.add(playlist_ids[division], tracks)
         sheets.write(output, {f"{STATE}!B{state_row}": [[len(rows) + 1]]})
         logging.info("%s: %d added, %d failed, saved row %d",
@@ -389,10 +397,14 @@ def main():
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         with AuthorizedSession(credentials) as google, requests.Session() as spotify:
-            matcher = Spotify(spotify, legacy_fallback=os.environ.get("SPOTIFY_LEGACY_FALLBACK") == "true")
+            overrides = TrackOverrides.from_env(google) if playlist_ids else None
+            matcher = Spotify(
+                spotify, legacy_fallback=os.environ.get("SPOTIFY_LEGACY_FALLBACK") == "true",
+                overrides=overrides,
+            )
             sync(Sheets(google), matcher, os.environ["SOURCE_SHEET_ID"],
                  os.environ["OUTPUT_SHEET_ID"], playlist_ids=playlist_ids,
-                 check=args.check, summary=args.summary)
+                 check=args.check, summary=args.summary, overrides=overrides)
     except KeyError as error:
         logging.error("Missing configuration or API response field: %s", error.args[0])
         return 1

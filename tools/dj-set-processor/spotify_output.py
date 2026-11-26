@@ -4,7 +4,7 @@ import logging
 import os
 from functools import partial
 
-from shared.spotify_matching import find_track
+from spotify_search import find_track
 
 LOGGER = logging.getLogger(__name__)
 API = "https://api.spotify.com/v1"
@@ -17,8 +17,9 @@ class SpotifyReauthorizationRequired(Exception):
 
 
 class SpotifyPlaylist:
-    def __init__(self, session):
+    def __init__(self, session, overrides=None):
         self.session = session
+        self.overrides = overrides
         self.refresh_token = None
 
     def access_token(self):
@@ -58,7 +59,12 @@ class SpotifyPlaylist:
 
     def search(self, access_token, artist, title, remix):
         api = partial(self.api, access_token=access_token)
-        return find_track(api, artist, title, remix)
+        if self.overrides is None:
+            return find_track(api, artist, title, remix)
+        uri = find_track(api, artist, title, remix, overrides=self.overrides.load())
+        if uri is None:
+            self.overrides.record_miss(artist, title)
+        return uri
 
     def __call__(self, playlist, tracks):
         token = self.access_token()
