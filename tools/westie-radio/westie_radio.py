@@ -102,19 +102,16 @@ class Drive:
 
 
 class Spotify:
-    def __init__(self, session, playlist, overrides=None):
+    def __init__(self, session, playlist):
         self.session = session
         self.playlist = playlist
-        self.overrides = overrides
         self.path = f"/playlists/{playlist}"
 
     def api(self, method, path, **kwargs):
         return request(self.session, "Spotify", method, SPOTIFY + path, **kwargs).json()
 
     def search(self, artist, title, remix):
-        if self.overrides is None:
-            return find_track(self.api, artist, title, remix)
-        return find_track(self.api, artist, title, remix, overrides=self.overrides.load())
+        return find_track(self.api, artist, title, remix)
 
     def snapshot(self):
         return self.api("GET", self.path, params={"fields": "snapshot_id"})["snapshot_id"]
@@ -208,8 +205,6 @@ def trim(drive, spotify, state, counts):
 
 
 def sync(drive, spotify, *, overrides=None):
-    if overrides is not None:
-        overrides.load()
     state = checkpoint(drive, spotify.playlist)
     reconcile(drive, spotify, state)
     files = drive.histories()
@@ -256,11 +251,11 @@ def sync(drive, spotify, *, overrides=None):
             counts["search_failed"] += 1
             LOG.warning("Search failed (%s)", str(error) if isinstance(error, SyncError) else "invalid response")
             continue
+        if uri is None and overrides is not None:
+            uri = overrides.resolve_miss(artist, title)
         if uri:
             batch.append(uri)
         else:
-            if overrides is not None:
-                overrides.record_miss(artist, title)
             counts["unmatched"] += 1
         if len(batch) == 100:
             flush()
@@ -317,7 +312,7 @@ def main():
             ).json()["access_token"]
             session.headers["Authorization"] = f"Bearer {token}"
             overrides = TrackOverrides.from_env(writer)
-            sync(drive, Spotify(session, playlist, overrides), overrides=overrides)
+            sync(drive, Spotify(session, playlist), overrides=overrides)
         return 0
     except SyncError as error:
         LOG.error("%s", error)

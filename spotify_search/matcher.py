@@ -7,8 +7,6 @@ Copyright (c) 2026 Koichi Tsunoda. Licensed under MIT.
 import re
 import unicodedata
 
-from .overrides import override_uri
-
 FEATURED = re.compile(r"\s*\((?:feat\.?|ft\.?|featuring)\s+([^()]+)\)", re.I)
 CREDIT_SEPARATOR = re.compile(r"\s*[,;]\s*|\s+(?:&|and|x)\s+", re.I)
 VERSION_SUFFIX = re.compile(
@@ -316,16 +314,12 @@ def recover_track(search, artist, names, candidates, duration_ms):
     return choose_recording(matches, duration_ms)
 
 
-def find_track(api, artist, title, remix, *, duration_ms=None, overrides=None, original_title=None):
+def find_track(api, artist, title, remix, *, duration_ms=None):
     """Return a matching Spotify track URI, or None if no match is found.
 
     The caller supplies an authenticated api(method, path, **kwargs) function.
     Pass an empty string when the source has no separate remix field.
     """
-    if overrides is not None:
-        uri = override_uri(overrides, artist, title if original_title is None else original_title)
-        if uri:
-            return uri
     # VirtualDJ can put the same version in both title and remix fields.
     if remix:
         base = re.sub(
