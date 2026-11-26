@@ -74,7 +74,6 @@ ARTIST_ALIASES = {
     "kool mo dee": "kool moe dee",
     "cee lo green": "ceelo green",
     "black eyed peas": "the black eyed peas",
-    "janet": "janet jackson",
     "ke ha": "kesha",
     "keb mo": "kebmo",
     "ms lauryn hill": "lauryn hill",
