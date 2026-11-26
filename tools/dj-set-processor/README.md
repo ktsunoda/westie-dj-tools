@@ -61,6 +61,7 @@ git clone https://github.com/ktsunoda/westie-dj-tools.git
 cd westie-dj-tools/tools/dj-set-processor
 python -m venv .venv
 source .venv/bin/activate
+export PYTHONPATH="$(cd ../.. && pwd)"
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
@@ -88,9 +89,9 @@ Create a **Python Cron Job** from your repository. Start with test resource IDs 
 
 | Setting | Value |
 | --- | --- |
-| Root directory | `tools/dj-set-processor` |
-| Build command | `pip install -r requirements.txt` |
-| Run command | `python -m dj_set_processor` |
+| Root directory | Repository root |
+| Build command | `pip install -r tools/dj-set-processor/requirements.txt` |
+| Run command | `PYTHONPATH=. python tools/dj-set-processor/dj_set_processor.py` |
 | Schedule | `*/15 * * * *` for every 15 minutes |
 | Google key | Store it as a Render Secret File named `google-service-account.json`. Set `GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/google-service-account.json`. |
 

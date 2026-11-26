@@ -6,7 +6,7 @@ Use a Spotify Developer Dashboard app that the playlist owner's account can auth
 2. With the project's Python dependencies installed, run this command on your Mac.
 
    ```sh
-   python3 -m spotify_authorize ~/.config/dj-set-processor/spotify.env
+   PYTHONPATH=../.. python3 -m spotify_authorize ~/.config/dj-set-processor/spotify.env
    ```
 
 3. Enter the app's client ID and client secret in the terminal when prompted. Approve private playlist access in the browser. The browser may show a connection error at the local callback. Copy the full address bar URL into the waiting terminal prompt. The helper saves credentials with owner-only permissions. Keep the secret, callback URL, and refresh token out of chat and Git.
