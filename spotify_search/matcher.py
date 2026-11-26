@@ -50,6 +50,11 @@ LIVE_LOCATION = re.compile(
     r"(spotify studios\b.*|late show with\b.*)$", re.I,
 )
 QUERY_SUFFIX = re.compile(r"\s*(?:\([^()]*\)|\[[^\[\]]*\]|\s+-\s+[^-]+)$")
+PARENTHETICAL = re.compile(r"\s+\(([^()]+)\)$")
+RECORDING_QUALIFIER = re.compile(
+    r"\b(?:rework|reprise|alternate|extended|session|rerecord(?:ed)?|sped|slowed|"
+    r"mono|stereo|orchestral|medley|cover|bonus|single|radio|short)\b", re.I,
+)
 RECOVERY_WORDS = {
     "one": "1", "two": "2", "ii": "2", "three": "3", "u": "you",
 }
@@ -203,6 +208,41 @@ def prefer_clean(track, candidates):
     return track["uri"]
 
 
+def parenthetical_title(title):
+    suffix = PARENTHETICAL.search(title)
+    if suffix and not (COVER_VERSION.search(suffix[1]) or RECORDING_QUALIFIER.search(suffix[1])):
+        return title[:suffix.start()].strip(), suffix[1]
+    return title, None
+
+
+def recover_parenthetical(search, artist, names, candidates, duration_ms):
+    source_titles = {title_key(name) for name in names}
+    subtitle_titles = set()
+    if duration_ms is not None:
+        for name in names:
+            base, subtitle = parenthetical_title(name)
+            if subtitle and title_and_credits(name) == (name, []):
+                subtitle_titles.add(title_key(base))
+                for track in search(f"track:{base} artist:{artist}"):
+                    candidates[track["uri"]] = track
+
+    album_matches = {}
+    subtitle_matches = {}
+    for track in candidates.values():
+        if not credits_match(artist, {normalized(entry["name"]) for entry in track["artists"]}):
+            continue
+        name = track["name"]
+        base, suffix = parenthetical_title(name)
+        album = track.get("album", {}).get("name", "")
+        key = recording_key(track)
+        if suffix and normalized(suffix) == normalized(album) and title_key(base) in source_titles:
+            album_matches.setdefault(key, track)
+        if (title_key(name) in subtitle_titles and track.get("duration_ms")
+                and abs(track["duration_ms"] - duration_ms) <= 2000):
+            subtitle_matches.setdefault(key, track)
+    return choose_recording(album_matches or subtitle_matches, duration_ms)
+
+
 def recover_track(search, artist, names, candidates, duration_ms):
     lead, *inline_guests = INLINE_FEATURED.split(artist, maxsplit=1)
     expected = {}
@@ -311,7 +351,9 @@ def recover_track(search, artist, names, candidates, duration_ms):
                     matches = shortened_title_matches
                 matches.setdefault(recording_key(track), track)
     matches = full_title_matches or shortened_title_matches or acoustic_matches or edit_matches
-    return choose_recording(matches, duration_ms)
+    if matches:
+        return choose_recording(matches, duration_ms)
+    return recover_parenthetical(search, artist, names, candidates, duration_ms)
 
 
 def find_track(api, artist, title, remix, *, duration_ms=None):
