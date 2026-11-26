@@ -8,7 +8,7 @@ import re
 from collections import Counter
 from datetime import datetime
 
-from spotify_matching import find_track
+from shared.spotify_matching import find_track
 from virtualdj import parse_m3u
 
 LOG = logging.getLogger(__name__)

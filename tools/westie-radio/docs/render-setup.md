@@ -11,10 +11,10 @@ Use a Render Cron Job named `westie-radio`. Create one for a fresh deployment or
 
 | Render setting | Value |
 | --- | --- |
-| Root directory | `tools/westie-radio` |
+| Root directory | Leave blank to use the repository root |
 | Runtime | Python 3.10 or newer |
-| Build command | `pip install -r requirements.txt` |
-| Cron command | `python -m westie_radio` |
+| Build command | `pip install -r tools/westie-radio/requirements.txt` |
+| Cron command | `cd tools/westie-radio && PYTHONPATH=../.. python -m westie_radio` |
 | Schedule | `*/15 * * * *` |
 | Secret file | `westie-radio-service-account.json` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/secrets/westie-radio-service-account.json` |
@@ -28,7 +28,7 @@ Obtain the Spotify refresh token using Spotify's [Authorization Code flow](https
 
 ## Verify the test job
 
-- Run `python -m westie_radio check-drive` with the test configuration to check listing, downloading a matching file if present, and saving and reading back the checkpoint. This command does not contact Spotify. Run it while the sync job is idle because it rewrites the checkpoint with its current contents.
+- Run `cd tools/westie-radio && PYTHONPATH=../.. python -m westie_radio check-drive` with the test configuration to check listing, downloading a matching file if present, and saving and reading back the checkpoint. This command does not contact Spotify. Run it while the sync job is idle because it rewrites the checkpoint with its current contents.
 - Run the sync twice with unchanged history. Verify that the second run adds and removes zero entries. Append a repeated play, run again, and confirm that it is added once.
 - Exercise overflow past 200 and confirm that trimming removes the URIs selected from the oldest entries. All copies of those URIs can be removed, including more recent copies.
 - Verify the checkpoint survives a redeploy. If a write is interrupted, the next run checks the observed playlist against the expected result. An inconclusive result leaves the pending operation in Drive and stops the run. Review the actual playlist and saved pending operation before resuming.
@@ -42,8 +42,8 @@ Spotify refresh tokens expire six months after authorization. Reauthorize the Sp
 
 ## Start production
 
-After the test passes, stop the old sync trigger if you have one and wait for any in-flight run. Upload a fresh production checkpoint file containing `{}`. With the production Drive folder, checkpoint file, and Spotify playlist IDs configured, run `python -m westie_radio seed` while the scheduled job is idle. It records the current end of every matching file and does not call Spotify. Then activate the schedule and verify both the first run and an unchanged rerun. If you want a clean deployment to import the current history file on its first run, leave the fresh checkpoint as `{}` and skip seeding.
+After the test passes, stop the old sync trigger if you have one and wait for any in-flight run. Upload a fresh production checkpoint file containing `{}`. With the production Drive folder, checkpoint file, and Spotify playlist IDs configured, run `cd tools/westie-radio && PYTHONPATH=../.. python -m westie_radio seed` while the scheduled job is idle. It records the current end of every matching file and does not call Spotify. Then activate the schedule and verify both the first run and an unchanged rerun. If you want a clean deployment to import the current history file on its first run, leave the fresh checkpoint as `{}` and skip seeding.
 
 ## Move an existing Render sync
 
-Point the existing cron job to this repository and set its root directory to `tools/westie-radio`. Keep its schedule, credentials, playlist ID, history folder ID, and checkpoint file ID. Deploy the new source and verify the next scheduled run.
+Point the existing cron job to this repository and apply the root directory, build command, and cron command together as shown above. The shared matcher must be available from the repository root. Keep its schedule, credentials, playlist ID, history folder ID, and checkpoint file ID. Deploy the new source and verify the next scheduled run.
