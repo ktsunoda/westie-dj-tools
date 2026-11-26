@@ -410,3 +410,25 @@ class SpotifyMatchingTests(unittest.TestCase):
 
         self.assertEqual(find_track(api, "Beyoncé", "Partition (Short Edit)", "", duration_ms=175000),
                          "original")
+
+    def test_search_ignores_an_unplayable_exact_match(self):
+        unavailable = self.candidate("unavailable", "Song", "Artist")
+        unavailable["is_playable"] = False
+        playable = self.candidate("playable", "Song", "Artist")
+        api = Mock(return_value={"tracks": {"items": [unavailable, playable]}})
+        self.assertEqual(find_track(api, "Artist", "Song", ""), "playable")
+
+    def test_early_matches_require_requested_guests(self):
+        solo = self.candidate("solo", "Song", "Artist")
+        mislabeled = self.candidate("mislabeled", "Song (feat. Guest)", "Artist")
+        duet = self.candidate("duet", "Song (feat. Guest)", "Artist", "Guest")
+        api = Mock(return_value={"tracks": {"items": [solo, mislabeled, duet]}})
+        self.assertEqual(find_track(api, "Artist", "Song (feat. Guest)", ""), "duet")
+        api.return_value = {"tracks": {"items": [solo, mislabeled]}}
+        self.assertIsNone(find_track(api, "Artist", "Song (feat. Guest)", ""))
+
+    def test_literal_clean_title_cannot_accept_an_explicit_recording(self):
+        wrong = self.candidate("wrong", "Song (Clean)", "Artist")
+        wrong["explicit"] = True
+        api = Mock(return_value={"tracks": {"items": [wrong]}})
+        self.assertIsNone(find_track(api, "Artist", "Song (Clean)", ""))

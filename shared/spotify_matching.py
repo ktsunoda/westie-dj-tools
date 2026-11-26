@@ -174,6 +174,12 @@ def has_recovery_credit(credit, artists):
     return False
 
 
+def is_available(track):
+    return (track.get("is_playable") is not False
+            and bool(track.get("available_markets", True))
+            and not track.get("restrictions"))
+
+
 def recording_key(track):
     return (track.get("external_ids", {}).get("isrc")
             or track.get("linked_from", {}).get("uri") or track["uri"])
@@ -323,10 +329,7 @@ def recover_verified_recording(search, artist, title):
     if not isrc:
         return None
     for track in search(f"isrc:{isrc}"):
-        if (track.get("external_ids", {}).get("isrc") == isrc
-                and track.get("is_playable") is not False
-                and track.get("available_markets", True)
-                and not track.get("restrictions")):
+        if track.get("external_ids", {}).get("isrc") == isrc:
             return track["uri"]
     return None
 
@@ -350,7 +353,11 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
         names = (title,)
     exact_titles = {normalized(name) for name in names}
     title_keys = {title_key(name) for name in names}
-    featured = FEATURED.findall(title)
+    cover = COVER_LABEL.search(title)
+    credit_title = title[:cover.start()] if cover and not COVER_VERSION.search(cover[0]) else title
+    source_title, featured = title_and_credits(credit_title)
+    content = CONTENT_LABEL.search(source_title)
+    requested_explicit = content[1].casefold().startswith("explicit") if content else None
     queries = [f"track:{name} artist:{artist}" for name in names]
     exact_query_count = len(queries)
     lead = CREDIT_SEPARATOR.split(artist, maxsplit=1)[0]
@@ -363,9 +370,14 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
 
     def search(query):
         if query not in search_results:
-            search_results[query] = api(
+            items = api(
                 "GET", "/search", params={"q": query, "type": "track", "limit": 10},
             )["tracks"]["items"]
+            search_results[query] = [
+                item for item in items
+                if is_available(item)
+                and (requested_explicit is None or item.get("explicit") is requested_explicit)
+            ]
         return search_results[query]
 
     fallback = None
@@ -380,17 +392,19 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
         for item in items:
             candidates[item["uri"]] = item
             artists = {normalized(entry["name"]) for entry in item["artists"]}
+            artist_keys = {artist_key(entry["name"]) for entry in item["artists"]}
+            if not all(has_recovery_credit(guest, artist_keys) for guest in featured):
+                continue
             if normalized(item["name"]) in exact_titles and normalized(artist) in artists:
                 return prefer_clean(item, items)
             if title_key(item["name"]) not in title_keys:
                 continue
-            if (fallback is None and credits_match(artist, artists)
-                    and all(credits_match(name, artists) for name in featured)):
+            if fallback is None and credits_match(artist, artists):
                 fallback = item
             recording = recording_key(item)
             aliases = {alias.strip() for name in artists
                        for alias in re.findall(r"\(([^()]+)\)$", name)}
-            if source_credit in aliases and all(credits_match(name, artists) for name in featured):
+            if source_credit in aliases:
                 alias_matches.setdefault(recording, item)
             if allow_lead_match and lead_credit in artists:
                 lead_matches.setdefault(recording, item)

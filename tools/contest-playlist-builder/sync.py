@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from shared.spotify_matching import find_track, normalized
+from shared.spotify_matching import find_track, is_available, normalized
 
 DIVISIONS = {
     "Newcomer": ("newcomer",),
@@ -191,9 +191,7 @@ class Spotify:
             for track in result["tracks"]["items"]:
                 if (track.get("id") == track_id
                         and track.get("external_ids", {}).get("isrc") == isrc
-                        and track.get("is_playable") is not False
-                        and track.get("available_markets", True)
-                        and not track.get("restrictions")
+                        and is_available(track)
                         and (not title.casefold().endswith("(cleaned)") or track.get("explicit") is False)):
                     logging.info("Verified Spotify catalog fallback: %s — %s", artist, title)
                     return track["uri"]
@@ -207,7 +205,7 @@ class Spotify:
             "q": f"track:{legacy_title} artist:{artist}", "type": "track", "limit": 1,
         })
         candidates = result["tracks"]["items"]
-        if not candidates:
+        if not candidates or not is_available(candidates[0]):
             return None
         logging.info("Legacy Spotify fallback: %s — %s", artist, title)
         return candidates[0]["uri"]
