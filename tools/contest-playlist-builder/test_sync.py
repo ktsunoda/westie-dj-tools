@@ -167,6 +167,17 @@ class SyncTests(unittest.TestCase):
         session.request.return_value.json.return_value = {"tracks": {"items": []}}
         self.assertIsNone(spotify.search("Artist", "Song (Album Version)"))
 
+    def test_explicit_notes_do_not_require_an_explicit_catalog_flag(self):
+        session = Mock()
+        spotify = Spotify(session)
+        spotify.access_token = "test-token"
+        session.request.return_value.json.return_value = {"tracks": {"items": [{
+            "uri": "spotify:track:match", "name": "Don't Wanna Go Home",
+            "artists": [{"name": "Jason Derulo"}], "explicit": False,
+        }]}}
+        self.assertEqual(spotify.search("Jason Derülo", "Don't Wanna Go Home (Explicit)"),
+                         "spotify:track:match")
+
     def test_catalog_fallback_requires_the_reviewed_release_and_recording(self):
         session = Mock()
         spotify = Spotify(session)

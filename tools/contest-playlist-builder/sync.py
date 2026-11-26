@@ -179,7 +179,8 @@ class Spotify:
             return self.request(method, path.lstrip("/"), "Spotify track search", **kwargs)
 
         artist = cell_text(artist)
-        matched = find_track(api, artist, title, "", duration_ms=duration_ms)
+        search_title = re.sub(r"\s*\(explicit\)$", "", title, flags=re.IGNORECASE).strip() or title
+        matched = find_track(api, artist, search_title, "", duration_ms=duration_ms)
         if matched:
             return matched
 
