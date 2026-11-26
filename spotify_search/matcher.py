@@ -66,8 +66,6 @@ CATALOG_ARTIST_ALIASES = {
     "madilyn": ("Madilyn Bailey", "0NxhAEPOSeCg6vypFr7yjU"),
     "martha and the vandellas": ("Martha Reeves & The Vandellas", "1Pe5hlKMCTULjosqZ6KanP"),
     "mikolas josef": ("MIKOLAS", "6Kz7MXIUFMtp5Ts91lagtR"),
-    "q": ("Q Marsden", "22vqVhfPJab5kkU9txDGX3"),
-    "r o": ("RUGI", "3TywsrRz1pBseLa6jNpq73"),
     "scott bradlees postmodern jukebox": ("Postmodern Jukebox", "5HYNPEO2NNBONQkp3Mvwvc"),
 }
 ARTIST_ALIASES = {
@@ -75,8 +73,6 @@ ARTIST_ALIASES = {
     "kool mo dee": "kool moe dee",
     "cee lo green": "ceelo green",
     "black eyed peas": "the black eyed peas",
-    "isaiah": "isaiah firebrace",
-    "janet": "janet jackson",
     "ke ha": "kesha",
     "keb mo": "kebmo",
     "ms lauryn hill": "lauryn hill",

@@ -100,20 +100,6 @@ class SpotifyMatchingTests(unittest.TestCase):
         self.assertEqual(find_track(api, "Earth, Wind & Fire", "Song", ""), "band")
         api.assert_called_once()
 
-    @unittest.skip("Recording-specific selection belongs in Track Overrides")
-    def test_plain_search_fallback_requires_the_tracking_room_recording(self):
-        original = self.candidate("original", "Delicate", "Taylor Swift")
-        recording = self.candidate(
-            "studio", "Delicate - Recorded at The Tracking Room Nashville", "Taylor Swift"
-        )
-        api = Mock(side_effect=[
-            {"tracks": {"items": [original]}},
-            {"tracks": {"items": [original, recording]}},
-        ])
-        title = "Delicate (Nashvilles Tracking Room Studios)"
-        self.assertEqual(find_track(api, "Taylor Swift", title, ""), "studio")
-        self.assertEqual(api.call_args.kwargs["params"]["q"], f"{title} Taylor Swift")
-
     def test_search_does_not_duplicate_version_present_in_both_fields(self):
         for artist, title, version, catalog_title, credits in (
             ("Billy Raffoul", "Homebody (feat. OSKA) [The Red Version]", "The Red Version",
@@ -258,14 +244,6 @@ class SpotifyMatchingTests(unittest.TestCase):
         self.assertEqual(find_track(api, "Ciara", "One, Two Step (feat. Missy Elliott)", ""), "right")
         self.assertIsNone(find_track(api, "Ciara", "One, Two Step (feat. Someone Else)", ""))
 
-    @unittest.skip("Recording-specific selection belongs in Track Overrides")
-    def test_recovery_matches_stylized_words_in_the_title(self):
-        track = self.candidate("right", "She Came II Give It II U", "Usher", "Nicki Minaj")
-        api = Mock(return_value={"tracks": {"items": [track]}})
-        self.assertEqual(
-            find_track(api, "Usher", "She Came to Give It to You (feat. Nicki Minaj)", ""), "right"
-        )
-
     def test_recovery_uses_cover_performer_and_keeps_requested_version(self):
         correct = self.candidate("right", "Someone You Loved", "Cover Performer")
         original = self.candidate("original", "Someone You Loved", "Original Performer")
@@ -380,11 +358,11 @@ class SpotifyMatchingTests(unittest.TestCase):
         self.assertIsNone(find_track(api, "Artist", "Song (Named Remix) (Contest Partial Edit)", ""))
 
     def test_verified_artist_rename_also_applies_to_guest_credits(self):
-        track = self.candidate("track", "Song (feat. R.O)", "Artist", "RUGI")
+        track = self.candidate("track", "Song (feat. Grace Gaustad)", "Artist", "Gaustad")
         api = Mock(return_value={"tracks": {"items": [track]}})
-        self.assertIsNone(find_track(api, "Artist", "Song (feat. R.O)", ""))
-        track["artists"][1]["id"] = "3TywsrRz1pBseLa6jNpq73"
-        self.assertEqual(find_track(api, "Artist", "Song (feat. R.O)", ""), "track")
+        self.assertIsNone(find_track(api, "Artist", "Song (feat. Grace Gaustad)", ""))
+        track["artists"][1]["id"] = "5MZxzpsn1zTTkiYwQ9Qz9b"
+        self.assertEqual(find_track(api, "Artist", "Song (feat. Grace Gaustad)", ""), "track")
 
     def test_recovery_equates_release_metadata_without_dropping_a_named_edit(self):
         source = self.candidate("right", "Soul Serenade - Remastered 2002", "The Jimmy Castor Bunch")
@@ -440,24 +418,6 @@ class SpotifyMatchingTests(unittest.TestCase):
         self.assertEqual(find_track(api, "T-Pain", "Up Down", ""), "clean")
         clean["album"]["name"] = "Other Release"
         self.assertEqual(find_track(api, "T-Pain", "Up Down", ""), "explicit")
-
-    @unittest.skip("Recording-specific selection belongs in Track Overrides")
-    def test_verified_recording_fallback_checks_catalog_identity_and_availability(self):
-        wrong = self.candidate("wrong", "Free Fallin' - Live", "John Mayer")
-        wrong.update(duration_ms=263573, external_ids={"isrc": "OTHER"})
-        correct = self.candidate("right", "Free Fallin' - Live at the Nokia Theatre", "John Mayer")
-        correct.update(duration_ms=263573, external_ids={"isrc": "USSM10801204"})
-
-        def api(method, path, *, params):
-            items = [wrong, correct] if params["q"] == "isrc:USSM10801204" else []
-            return {"tracks": {"items": items}}
-
-        args = (api, "John Mayer", "Free Fallin' (Live)", "")
-        self.assertEqual(find_track(*args, duration_ms=264000), "right")
-        self.assertEqual(find_track(*args, duration_ms=257000), "right")
-        self.assertEqual(find_track(*args), "right")
-        correct["available_markets"] = []
-        self.assertIsNone(find_track(*args, duration_ms=264000))
 
     def test_short_edit_can_find_the_full_length_beyonce_track(self):
         original = self.candidate("original", "Partition", "Beyoncé")

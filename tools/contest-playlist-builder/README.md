@@ -23,8 +23,6 @@ Set `SPOTIFY_PLAYLIST_IDS` to a JSON object containing the six division names an
 
 ## Legacy search compatibility
 
-Set `SPOTIFY_LEGACY_FALLBACK=true` to try the former Apps Script search after the shared matcher finds no track. The legacy query preserves the source artist, strips the original set of title annotations such as `(Radio Edit)` and `(Album Version)`, and accepts Spotify's first result. Every fallback match is logged. This can recover tracks from the old playlists, including results whose Spotify credit or version differs from the source. Leave the variable unset to require the shared matcher's checks.
-
 ## Cutover
 
 1. Set up a Google service account with the Sheets API enabled. Give it Viewer access to the DJ history workbook and Editor access to the existing output workbook. Set `SOURCE_SHEET_ID` to the DJ history workbook ID, set `OUTPUT_SHEET_ID` to the existing output workbook ID and point `GOOGLE_APPLICATION_CREDENTIALS` at the service account JSON.
