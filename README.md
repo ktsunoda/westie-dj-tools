@@ -16,7 +16,7 @@ All three tools use the [`spotify_search` package](spotify_search/) when looking
 
 Name the workbook **Spotify Search** and its tab **Track Overrides**. Use these headers in A1:C1: `Artist`, `Title`, `Spotify Track URL`.
 
-After a Spotify search finds no match, the tool looks up the original artist and title as an exact, case-sensitive pair. The tool uses the header names to find the columns, so you can rearrange them. Paste a Spotify track URL into an existing row to select that track when the pair is next searched. A blank URL marks a search miss. New review rows appear at the top, and you can sort the full rows as needed. If a shared matcher fix resolves it, verify the pair without an override and delete the entire sheet row. Contest Playlist Builder uses saved row counters, so updating an override does not retry previously skipped rows.
+After a Spotify search finds no match, the tool looks up the original artist and title as an exact, case-sensitive pair. The tool uses the header names to find the columns, so you can rearrange them. Paste a Spotify track URL into an existing row to select that track when the pair is next searched. A blank URL marks a search miss. If the tab has a `Status` column, new misses get `⏳` there. Edit that status manually as you review each row. New review rows appear at the top, and you can sort the full rows as needed. If a shared matcher fix resolves it, verify the pair without an override and delete the entire sheet row. Contest Playlist Builder uses saved row counters, so updating an override does not retry previously skipped rows.
 
 With the workbook ID unset, the tools use their existing search and failure reporting.
 
