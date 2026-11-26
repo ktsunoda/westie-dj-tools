@@ -149,10 +149,9 @@ class Sheets:
 
 
 class Spotify:
-    def __init__(self, session, *, legacy_fallback=False, overrides=None):
+    def __init__(self, session, *, legacy_fallback=False):
         self.session = session
         self.legacy_fallback = legacy_fallback
-        self.overrides = overrides
         self.access_token = None
 
     def authorize(self):
@@ -181,10 +180,7 @@ class Spotify:
 
         artist = cell_text(artist)
         search_title = re.sub(r"\s*\(explicit\)$", "", title, flags=re.IGNORECASE).strip() or title
-        matched = find_track(
-            api, artist, search_title, "", duration_ms=duration_ms, original_title=title,
-            overrides=self.overrides.load() if self.overrides is not None else None,
-        )
+        matched = find_track(api, artist, search_title, "", duration_ms=duration_ms)
         if matched:
             return matched
 
@@ -343,8 +339,6 @@ def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, sum
     if check:
         return
 
-    if overrides is not None:
-        overrides.load()
     sheets.write(output, {ranges[division]: rows for division, rows in lists.items() if rows})
     # Re-read so existing tail rows are retained, as with Apps Script's in-place writes.
     refreshed = sheets.read(output, list(ranges.values()))
@@ -361,15 +355,14 @@ def sync(sheets, spotify, source, output, *, playlist_ids=None, check=False, sum
             title = cell_text(title).strip()
             duration_ms = matching_duration(durations.get((cell_text(artist), title), ()))
             uri = spotify.search(artist, title, duration_ms=duration_ms)
+            if uri is None and overrides is not None:
+                uri = overrides.resolve_miss(cell_text(artist), title)
             if uri:
                 tracks.append(uri)
             else:
                 failures.append([division, artist, title, datetime.now(timezone.utc).isoformat()])
         if overrides is None:
             sheets.append_failures(output, failures)
-        else:
-            for _, artist, title, _ in failures:
-                overrides.record_miss(cell_text(artist), title)
         spotify.add(playlist_ids[division], tracks)
         sheets.write(output, {f"{STATE}!B{state_row}": [[len(rows) + 1]]})
         logging.info("%s: %d added, %d failed, saved row %d",
@@ -400,7 +393,6 @@ def main():
             overrides = TrackOverrides.from_env(google) if playlist_ids else None
             matcher = Spotify(
                 spotify, legacy_fallback=os.environ.get("SPOTIFY_LEGACY_FALLBACK") == "true",
-                overrides=overrides,
             )
             sync(Sheets(google), matcher, os.environ["SOURCE_SHEET_ID"],
                  os.environ["OUTPUT_SHEET_ID"], playlist_ids=playlist_ids,

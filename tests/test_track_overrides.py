@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from spotify_search import TrackOverrides, find_track
+from spotify_search import TrackOverrides
 
 
 ARTIST = "Michael Jackson & Akon"
@@ -15,30 +15,44 @@ def response(payload=None, status=200):
     return Mock(ok=status == 200, status_code=status, json=Mock(return_value=payload))
 
 
-def sheet(*rows):
+def sheet(*rows, headers=HEADERS):
     return response({"sheets": [{
         "properties": {"title": "Track Overrides", "sheetId": 0},
         "data": [{"rowData": [
             {"values": [{"formattedValue": cell} for cell in row]}
-            for row in [HEADERS, *rows]
+            for row in [headers, *rows]
         ]}],
     }]})
 
 
 class TrackOverridesTests(unittest.TestCase):
-    def test_override_uses_original_title_without_querying_spotify(self):
+    def test_exact_override_and_existing_blank_pair_on_reordered_columns(self):
         session = Mock()
-        session.get.return_value = sheet([ARTIST, TITLE, URL])
+        session.get.return_value = sheet(
+            [URL, TITLE, ARTIST], ["", "Missing", ARTIST],
+            headers=["Spotify Track URL", "Title", "Artist"],
+        )
+        session.post.return_value = response()
         workbook = TrackOverrides(session, "workbook")
-        api = Mock()
 
-        uri = find_track(api, ARTIST, "Hold My Hand", "", original_title=TITLE, overrides=workbook.load())
-
-        self.assertEqual(uri, f"spotify:track:{TRACK_ID}")
-        api.assert_not_called()
-        workbook.record_miss(ARTIST.lower(), TITLE)
-        session.get.assert_called_once()
+        self.assertEqual(workbook.resolve_miss(ARTIST, TITLE), f"spotify:track:{TRACK_ID}")
+        self.assertIsNone(workbook.resolve_miss(ARTIST, "Missing"))
         session.post.assert_not_called()
+
+        self.assertIsNone(workbook.resolve_miss(ARTIST.lower(), TITLE))
+        session.get.assert_called_once()
+        updates = session.post.call_args.kwargs["json"]["requests"][1:3]
+        self.assertEqual([item["updateCells"]["start"]["columnIndex"] for item in updates], [2, 1])
+
+    def test_deleted_row_can_be_queued_again_on_next_run(self):
+        session = Mock()
+        session.get.side_effect = [sheet([ARTIST, TITLE, URL]), sheet()]
+        session.post.return_value = response()
+
+        self.assertEqual(TrackOverrides(session, "workbook").resolve_miss(ARTIST, TITLE),
+                         f"spotify:track:{TRACK_ID}")
+        self.assertIsNone(TrackOverrides(session, "workbook").resolve_miss(ARTIST, TITLE))
+        session.post.assert_called_once()
 
     def test_unmatched_pair_is_written_once_with_blank_url(self):
         session = Mock()
@@ -46,12 +60,12 @@ class TrackOverridesTests(unittest.TestCase):
         session.post.return_value = response()
         workbook = TrackOverrides(session, "workbook")
 
-        workbook.record_miss(ARTIST, TITLE)
-        workbook.record_miss(ARTIST, TITLE)
+        workbook.resolve_miss(ARTIST, TITLE)
+        workbook.resolve_miss(ARTIST, TITLE)
 
         session.post.assert_called_once()
         requests = session.post.call_args.kwargs["json"]["requests"]
-        self.assertEqual(requests[1]["updateCells"]["rows"][0]["values"], [
+        self.assertEqual([item["updateCells"]["rows"][0]["values"][0] for item in requests[1:3]], [
             {"userEnteredValue": {"stringValue": ARTIST}},
             {"userEnteredValue": {"stringValue": TITLE}},
         ])
@@ -62,13 +76,9 @@ class TrackOverridesTests(unittest.TestCase):
         workbook = TrackOverrides(session, "workbook")
         workbook.load()
 
-        def existing(*args, **kwargs):
-            requests = session.post.call_args.kwargs["json"]["requests"]
-            return response(requests[2]["createDeveloperMetadata"]["developerMetadata"])
-
         session.post.return_value = response(status=400)
-        session.get.side_effect = existing
+        session.get.side_effect = [response(), sheet([ARTIST, TITLE])]
 
-        workbook.record_miss(ARTIST, TITLE)
-        workbook.record_miss(ARTIST, TITLE)
+        workbook.resolve_miss(ARTIST, TITLE)
+        workbook.resolve_miss(ARTIST, TITLE)
         session.post.assert_called_once()

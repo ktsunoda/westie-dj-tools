@@ -113,6 +113,23 @@ class SyncTests(unittest.TestCase):
                          ["All Star", "C", "Missing"])
         self.sheets.write.assert_called_with("output", {"'Spotify Sync State'!B3": [[4]]})
 
+    def test_checks_shared_overrides_only_for_spotify_misses(self):
+        self.history[1][0][10] = "All Star"
+        refreshed = [[], [], [], [], [["A", "Old"], ["B", "New (Clean edit)"], ["C", "Missing"]], []]
+        self.sheets.read.side_effect = [self.headers, self.history, [self.state, *self.original], refreshed]
+        self.spotify.search.side_effect = ["spotify:track:new", None]
+        overrides = Mock()
+        overrides.resolve_miss.return_value = "spotify:track:override"
+
+        sync(self.sheets, self.spotify, "source", "output", playlist_ids=self.playlist_ids,
+             overrides=overrides)
+
+        overrides.resolve_miss.assert_called_once_with("C", "Missing")
+        self.spotify.add.assert_called_once_with(
+            self.playlist_ids["All Star"], ["spotify:track:new", "spotify:track:override"],
+        )
+        self.sheets.append_failures.assert_not_called()
+
     def test_append_error_leaves_existing_counter(self):
         self.history[1] = self.history[1][1:2]
         refreshed = [[], [], [], [], [["A", "Old"], ["B", "New (Clean edit)"]], []]

@@ -59,11 +59,9 @@ class SpotifyPlaylist:
 
     def search(self, access_token, artist, title, remix):
         api = partial(self.api, access_token=access_token)
-        if self.overrides is None:
-            return find_track(api, artist, title, remix)
-        uri = find_track(api, artist, title, remix, overrides=self.overrides.load())
-        if uri is None:
-            self.overrides.record_miss(artist, title)
+        uri = find_track(api, artist, title, remix)
+        if uri is None and self.overrides is not None:
+            return self.overrides.resolve_miss(artist, title)
         return uri
 
     def __call__(self, playlist, tracks):

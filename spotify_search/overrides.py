@@ -14,19 +14,12 @@ class TrackOverridesError(ValueError):
     """The shared override workbook could not be read or updated."""
 
 
-def pair_key(artist, title):
-    return artist.strip().casefold(), title.strip().casefold()
-
-
-def override_uri(overrides, artist, title):
-    return overrides.get(pair_key(artist, title))
-
-
 class TrackOverrides:
     def __init__(self, session, spreadsheet_id):
         self.session = session
         self.url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
         self.sheet_id = None
+        self.columns = {}
         self.mapping = {}
         self.pairs = set()
 
@@ -35,11 +28,11 @@ class TrackOverrides:
         workbook_id = os.environ.get("SPOTIFY_SEARCH_SPREADSHEET_ID")
         return cls(session, workbook_id) if workbook_id else None
 
-    def load(self):
-        if self.sheet_id is not None:
+    def load(self, *, refresh=False):
+        if self.sheet_id is not None and not refresh:
             return self.mapping
         response = self.session.get(self.url, params={
-            "ranges": f"'{TAB}'!A:C",
+            "ranges": f"'{TAB}'",
             "fields": "sheets(properties(sheetId,title),data(rowData(values(formattedValue))))",
         }, timeout=30)
         if not response.ok:
@@ -52,14 +45,18 @@ class TrackOverrides:
             [cell.get("formattedValue", "") for cell in row.get("values", [])]
             for row in sheet["data"][0].get("rowData", [])
         ]
-        if not rows or tuple(rows[0]) != HEADERS:
+        header = rows[0] if rows else []
+        if any(header.count(name) != 1 for name in HEADERS):
             raise TrackOverridesError(f"{TAB} has unexpected headers")
+        columns = {name: header.index(name) for name in HEADERS}
         pairs, mapping = set(), {}
         for index, row in enumerate(rows[1:], 2):
-            artist, title, url = (row + ["", "", ""])[:3]
+            artist, title, url = (
+                row[column] if column < len(row) else "" for column in columns.values()
+            )
             if not artist.strip() or not title.strip():
                 continue
-            key = pair_key(artist, title)
+            key = (artist, title)
             pairs.add(key)
             if url.strip():
                 match = TRACK_URL.fullmatch(url.strip())
@@ -68,16 +65,18 @@ class TrackOverrides:
                 uri = f"spotify:track:{match[1]}"
                 if mapping.setdefault(key, uri) != uri:
                     raise TrackOverridesError(f"Conflicting Spotify track URLs in {TAB} row {index}")
+        self.columns = columns
         self.mapping = mapping
         self.pairs = pairs
         self.sheet_id = sheet["properties"]["sheetId"]
         return self.mapping
 
-    def record_miss(self, artist, title):
+    def resolve_miss(self, artist, title):
+        """Return the exact pair's override or queue an unknown pair for review."""
         self.load()
-        key = pair_key(artist, title)
-        if not all(key) or key in self.pairs:
-            return
+        key = (artist, title)
+        if not artist.strip() or not title.strip() or key in self.pairs:
+            return self.mapping.get(key)
         value = json.dumps(key, ensure_ascii=False)
         digest = hashlib.sha256(value.encode()).digest()
         base_id = int.from_bytes(digest[:4], "big")
@@ -93,13 +92,11 @@ class TrackOverrides:
             }
             response = self.session.post(f"{self.url}:batchUpdate", json={"requests": [
                 {"insertDimension": {"range": row, "inheritFromBefore": False}},
-                {"updateCells": {
-                    "start": {"sheetId": self.sheet_id, "rowIndex": 1, "columnIndex": 0},
-                    "rows": [{"values": [
-                        {"userEnteredValue": {"stringValue": text}} for text in (artist, title)
-                    ]}],
+                *({"updateCells": {
+                    "start": {"sheetId": self.sheet_id, "rowIndex": 1, "columnIndex": self.columns[name]},
+                    "rows": [{"values": [{"userEnteredValue": {"stringValue": text}}]}],
                     "fields": "userEnteredValue",
-                }},
+                }} for name, text in zip(HEADERS, key)),
                 {"createDeveloperMetadata": {"developerMetadata": metadata}},
             ]}, timeout=30)
             if response.ok:
@@ -109,9 +106,11 @@ class TrackOverrides:
             existing = self.session.get(f"{self.url}/developerMetadata/{metadata_id}", timeout=30)
             if not existing.ok:
                 raise self._write_error(response)
-            entry = existing.json()
-            if entry.get("metadataKey") == metadata["metadataKey"] and entry.get("metadataValue") == value:
-                break
+            # The failed batch may have raced another writer, or the old
+            # metadata may remain on a row whose cells were edited or cleared.
+            self.load(refresh=True)
+            if key in self.pairs:
+                return self.mapping.get(key)
         else:
             raise TrackOverridesError(f"Could not allocate a unique review row in {TAB}")
         self.pairs.add(key)
