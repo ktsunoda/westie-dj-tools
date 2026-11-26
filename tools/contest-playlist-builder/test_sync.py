@@ -65,6 +65,20 @@ class SyncTests(unittest.TestCase):
             "source", ["'2026'!B2"], render_option="FORMATTED_VALUE",
         )
 
+    def test_sync_passes_history_duration_without_changing_output_rows(self):
+        for columns in self.headers:
+            columns[0][2] = "Duration"
+        self.history[1][1][2] = "3:26"
+        self.history[1][2][2] = 210 / 86400
+        refreshed = [[], [], [], [], [["A", "Old"], ["B", "New (Clean edit)"], ["C", "Missing"]], []]
+        self.history[1][0][10] = "All Star"
+        self.sheets.read.side_effect = [self.headers, self.history, [self.state, *self.original, []], refreshed]
+        self.spotify.search.side_effect = ["spotify:track:new", None]
+        sync(self.sheets, self.spotify, "source", "output", playlist_ids=self.playlist_ids)
+        self.assertEqual([call.kwargs["duration_ms"] for call in self.spotify.search.call_args_list],
+                         [206000, 210000])
+        self.sheets.write.assert_any_call("output", {"'All Star'!A2:B": refreshed[4]})
+
     def test_missing_competition_header_fails_before_output_writes(self):
         self.sheets.tabs.return_value = {"2026"}
         self.sheets.read.return_value = [[["Artist", "Title", "Spotify"]]]
