@@ -7,6 +7,7 @@ import re
 
 TAB = "Track Overrides"
 HEADERS = ("Artist", "Title", "Spotify Track URL")
+STATUS_HEADER = "Status"
 TRACK_URL = re.compile(r"https://open\.spotify\.com/(?:intl-[a-zA-Z-]+/)?track/([A-Za-z0-9]{22})(?:[?#].*)?")
 
 
@@ -46,13 +47,13 @@ class TrackOverrides:
             for row in sheet["data"][0].get("rowData", [])
         ]
         header = rows[0] if rows else []
-        if any(header.count(name) != 1 for name in HEADERS):
+        if any(header.count(name) != 1 for name in HEADERS) or header.count(STATUS_HEADER) > 1:
             raise TrackOverridesError(f"{TAB} has unexpected headers")
         columns = {name: header.index(name) for name in HEADERS}
         pairs, mapping = set(), {}
         for index, row in enumerate(rows[1:], 2):
             artist, title, url = (
-                row[column] if column < len(row) else "" for column in columns.values()
+                row[columns[name]] if columns[name] < len(row) else "" for name in HEADERS
             )
             if not artist.strip() or not title.strip():
                 continue
@@ -65,6 +66,8 @@ class TrackOverrides:
                 uri = f"spotify:track:{match[1]}"
                 if mapping.setdefault(key, uri) != uri:
                     raise TrackOverridesError(f"Conflicting Spotify track URLs in {TAB} row {index}")
+        if STATUS_HEADER in header:
+            columns[STATUS_HEADER] = header.index(STATUS_HEADER)
         self.columns = columns
         self.mapping = mapping
         self.pairs = pairs
@@ -82,6 +85,21 @@ class TrackOverrides:
         base_id = int.from_bytes(digest[:4], "big")
         row = {"sheetId": self.sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": 2}
         for offset in range(5):
+            cells = {"Artist": artist, "Title": title}
+            status_format = []
+            if STATUS_HEADER in self.columns:
+                cells[STATUS_HEADER] = "⏳"
+                column = self.columns[STATUS_HEADER]
+                status_format = [{"repeatCell": {
+                    "range": {
+                        "sheetId": self.sheet_id, "startRowIndex": 1, "endRowIndex": 2,
+                        "startColumnIndex": column, "endColumnIndex": column + 1,
+                    },
+                    "cell": {"userEnteredFormat": {
+                        "horizontalAlignment": "CENTER",
+                    }},
+                    "fields": "userEnteredFormat.horizontalAlignment",
+                }}]
             metadata_id = (base_id + offset) % (2**31 - 1) + 1
             # The row and its unique key are created atomically. Deleting the row
             # in Sheets also removes its metadata so the pair can be logged again.
@@ -96,7 +114,8 @@ class TrackOverrides:
                     "start": {"sheetId": self.sheet_id, "rowIndex": 1, "columnIndex": self.columns[name]},
                     "rows": [{"values": [{"userEnteredValue": {"stringValue": text}}]}],
                     "fields": "userEnteredValue",
-                }} for name, text in zip(HEADERS, key)),
+                }} for name, text in cells.items()),
+                *status_format,
                 {"createDeveloperMetadata": {"developerMetadata": metadata}},
             ]}, timeout=30)
             if response.ok:

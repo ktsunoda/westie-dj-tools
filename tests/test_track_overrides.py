@@ -29,8 +29,8 @@ class TrackOverridesTests(unittest.TestCase):
     def test_exact_override_and_existing_blank_pair_on_reordered_columns(self):
         session = Mock()
         session.get.return_value = sheet(
-            [URL, TITLE, ARTIST], ["", "Missing", ARTIST],
-            headers=["Spotify Track URL", "Title", "Artist"],
+            [URL, "Done", TITLE, ARTIST], ["", "Reviewing", "Missing", ARTIST],
+            headers=["Spotify Track URL", "Status", "Title", "Artist"],
         )
         session.post.return_value = response()
         workbook = TrackOverrides(session, "workbook")
@@ -41,8 +41,24 @@ class TrackOverridesTests(unittest.TestCase):
 
         self.assertIsNone(workbook.resolve_miss(ARTIST.lower(), TITLE))
         session.get.assert_called_once()
-        updates = session.post.call_args.kwargs["json"]["requests"][1:3]
-        self.assertEqual([item["updateCells"]["start"]["columnIndex"] for item in updates], [2, 1])
+        requests = session.post.call_args.kwargs["json"]["requests"]
+        updates = requests[1:4]
+        cells = {
+            update["start"]["columnIndex"]: update["rows"][0]["values"][0]["userEnteredValue"]["stringValue"]
+            for item in updates
+            for update in [item["updateCells"]]
+        }
+        self.assertEqual(cells, {3: ARTIST.lower(), 2: TITLE, 1: "⏳"})
+        self.assertEqual(requests[4]["repeatCell"], {
+            "range": {
+                "sheetId": 0, "startRowIndex": 1, "endRowIndex": 2,
+                "startColumnIndex": 1, "endColumnIndex": 2,
+            },
+            "cell": {"userEnteredFormat": {
+                "horizontalAlignment": "CENTER",
+            }},
+            "fields": "userEnteredFormat.horizontalAlignment",
+        })
 
     def test_deleted_row_can_be_queued_again_on_next_run(self):
         session = Mock()
