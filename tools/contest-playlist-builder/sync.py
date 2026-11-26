@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from spotify_search import TrackOverrides, find_track, is_available, normalized
+from spotify_search import TrackOverrides, find_track
 
 DIVISIONS = {
     "Newcomer": ("newcomer",),
@@ -19,25 +19,6 @@ DIVISIONS = {
 }
 STATE = "'Spotify Sync State'"
 FAILED = "'Failed Searches'"
-# Use an alternate catalog cut only for reviewed source titles.
-CATALOG_FALLBACKS = {
-    ("bill withers & grover washingt", "just the two of us"): ("USEE19901162", "1ko2lVN0vKGUl9zrU0qSlT"),
-    ("dan barrett", "love potion #9 (cleaned)"): ("US89R0610493", "3oPfJnT3jMFixktiN6f9Oj"),
-    ("justin timberlake", "lovestoned"): ("USJI10600495", "5iyE2d4U3Vc5cqY9mPTlpy"),
-    ("salt-n-pepa", "shoop"): ("USV291488303", "1boZz3pZBwE6BG68RhioNn"),
-    ("usher", "more"): ("USLF21000098", "0aBKFfdyOD1Ttvgv0cfjjJ"),
-}
-LEGACY_TRACK_SUFFIXES = (
-    r"\[feat\.[^\]]*\]",
-    r"\(feat\.[^)]*\)",
-    r"\(radio edit\)",
-    r"\(album version\)",
-    r"\(original song[^)]*\)",
-    r"\(clean edit\)",
-    r"\(cleaned\)",
-    r"\(explicit\)",
-    r"\(remastered\)",
-)
 
 
 class SyncError(Exception):
@@ -86,12 +67,6 @@ def build_lists(rows):
                 seen[division].add(key)
                 lists[division].append([artist, title])
     return lists, sorted(labels, key=lambda label: label.encode("utf-16-be"))
-
-
-def legacy_search_title(title):
-    for pattern in LEGACY_TRACK_SUFFIXES:
-        title = re.sub(r"\s*" + pattern, "", title, count=1, flags=re.IGNORECASE)
-    return title.strip()
 
 
 def checked_json(response, operation):
@@ -149,9 +124,8 @@ class Sheets:
 
 
 class Spotify:
-    def __init__(self, session, *, legacy_fallback=False):
+    def __init__(self, session):
         self.session = session
-        self.legacy_fallback = legacy_fallback
         self.access_token = None
 
     def authorize(self):
@@ -180,35 +154,7 @@ class Spotify:
 
         artist = cell_text(artist)
         search_title = re.sub(r"\s*\(explicit\)$", "", title, flags=re.IGNORECASE).strip() or title
-        matched = find_track(api, artist, search_title, "", duration_ms=duration_ms)
-        if matched:
-            return matched
-
-        fallback = CATALOG_FALLBACKS.get((normalized(artist), normalized(title)))
-        if fallback:
-            isrc, track_id = fallback
-            result = api("GET", "/search", params={"q": f"isrc:{isrc}", "type": "track", "limit": 10})
-            for track in result["tracks"]["items"]:
-                if (track.get("id") == track_id
-                        and track.get("external_ids", {}).get("isrc") == isrc
-                        and is_available(track)
-                        and (not title.casefold().endswith("(cleaned)") or track.get("explicit") is False)):
-                    logging.info("Verified Spotify catalog fallback: %s — %s", artist, title)
-                    return track["uri"]
-
-        if not self.legacy_fallback:
-            return None
-        legacy_title = legacy_search_title(title)
-        if not legacy_title:
-            return None
-        result = api("GET", "/search", params={
-            "q": f"track:{legacy_title} artist:{artist}", "type": "track", "limit": 1,
-        })
-        candidates = result["tracks"]["items"]
-        if not candidates or not is_available(candidates[0]):
-            return None
-        logging.info("Legacy Spotify fallback: %s — %s", artist, title)
-        return candidates[0]["uri"]
+        return find_track(api, artist, search_title, "", duration_ms=duration_ms)
 
     def add(self, playlist, tracks):
         for start in range(0, len(tracks), 100):
@@ -391,9 +337,7 @@ def main():
         )
         with AuthorizedSession(credentials) as google, requests.Session() as spotify:
             overrides = TrackOverrides.from_env(google) if playlist_ids else None
-            matcher = Spotify(
-                spotify, legacy_fallback=os.environ.get("SPOTIFY_LEGACY_FALLBACK") == "true",
-            )
+            matcher = Spotify(spotify)
             sync(Sheets(google), matcher, os.environ["SOURCE_SHEET_ID"],
                  os.environ["OUTPUT_SHEET_ID"], playlist_ids=playlist_ids,
                  check=args.check, summary=args.summary, overrides=overrides)

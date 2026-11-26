@@ -153,36 +153,15 @@ class SyncTests(unittest.TestCase):
         self.sheets.tabs.assert_not_called()
         self.sheets.write.assert_not_called()
 
-    def test_legacy_search_is_opt_in_and_preserves_existing_match(self):
+    def test_spotify_search_rejects_album_recording_for_clean_edit(self):
         session = Mock()
-        spotify = Spotify(session, legacy_fallback=True)
+        spotify = Spotify(session)
         spotify.access_token = "test-token"
-        session.request.return_value.json.return_value = {"tracks": {"items": [
-            {"uri": "spotify:track:correct", "name": "Song (Clean Edit)",
-             "artists": [{"name": "Artist"}], "explicit": False},
-        ]}}
-        self.assertEqual(spotify.search("Artist", "Song (Clean Edit)"), "spotify:track:correct")
-        session.request.assert_called_once()
-
-        session.reset_mock()
         session.request.return_value.json.return_value = {"tracks": {"items": [
             {"uri": "spotify:track:album", "name": "Song",
              "artists": [{"name": "Artist"}]},
         ]}}
-        strict = Spotify(session)
-        strict.access_token = "test-token"
-        self.assertIsNone(strict.search("Artist", "Song (Clean Edit)"))
-        with self.assertLogs(level="INFO"):
-            self.assertEqual(spotify.search("Artist", "Song (Clean Edit)"), "spotify:track:album")
-        self.assertEqual(session.request.call_args.kwargs["params"],
-                         {"q": "track:Song artist:Artist", "type": "track", "limit": 1})
-
-    def test_legacy_search_returns_none_for_empty_candidate_list(self):
-        session = Mock()
-        spotify = Spotify(session, legacy_fallback=True)
-        spotify.access_token = "test-token"
-        session.request.return_value.json.return_value = {"tracks": {"items": []}}
-        self.assertIsNone(spotify.search("Artist", "Song (Album Version)"))
+        self.assertIsNone(spotify.search("Artist", "Song (Clean Edit)"))
 
     def test_explicit_notes_do_not_require_an_explicit_catalog_flag(self):
         session = Mock()
@@ -194,31 +173,6 @@ class SyncTests(unittest.TestCase):
         }]}}
         self.assertEqual(spotify.search("Jason Derülo", "Don't Wanna Go Home (Explicit)"),
                          "spotify:track:match")
-
-    def test_catalog_fallback_requires_the_reviewed_release_and_recording(self):
-        session = Mock()
-        spotify = Spotify(session)
-        spotify.access_token = "test-token"
-        correct = {
-            "id": "1ko2lVN0vKGUl9zrU0qSlT", "uri": "spotify:track:1ko2lVN0vKGUl9zrU0qSlT",
-            "external_ids": {"isrc": "USEE19901162"}, "is_playable": True,
-        }
-        other_edit = {**correct, "id": "another-release", "uri": "spotify:track:another-release"}
-
-        def request(method, url, **kwargs):
-            response = Mock(ok=True)
-            query = kwargs["params"]["q"]
-            tracks = [other_edit, correct] if query == "isrc:USEE19901162" else []
-            response.json.return_value = {"tracks": {"items": tracks}}
-            return response
-
-        session.request.side_effect = request
-        artist = "Bill Withers & Grover Washingt"
-        with self.assertLogs(level="INFO"):
-            self.assertEqual(spotify.search(artist, "Just the Two of Us"), correct["uri"])
-        self.assertIsNone(spotify.search(artist, "Just the Two of Us (Acoustic)"))
-        correct["is_playable"] = False
-        self.assertIsNone(spotify.search(artist, "Just the Two of Us"))
 
     def test_spotify_search_uses_shared_matcher_and_preserves_version(self):
         session = Mock()
