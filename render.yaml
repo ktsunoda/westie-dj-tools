@@ -12,6 +12,8 @@ services:
         sync: false
       - key: OUTPUT_SHEET_ID
         sync: false
+      - key: SPOTIFY_SEARCH_SPREADSHEET_ID
+        sync: false
       - key: SPOTIFY_PLAYLIST_IDS
         sync: false
       - key: SPOTIFY_CLIENT_ID

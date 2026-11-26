@@ -142,7 +142,7 @@ class SyncTests(unittest.TestCase):
         spotify.access_token = "test-token"
         session.request.return_value.json.return_value = {"tracks": {"items": [
             {"uri": "spotify:track:correct", "name": "Song (Clean Edit)",
-             "artists": [{"name": "Artist"}]},
+             "artists": [{"name": "Artist"}], "explicit": False},
         ]}}
         self.assertEqual(spotify.search("Artist", "Song (Clean Edit)"), "spotify:track:correct")
         session.request.assert_called_once()

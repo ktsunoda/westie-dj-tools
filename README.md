@@ -10,9 +10,15 @@ Python tools for West Coast Swing DJs to archive sets, share recent plays, and b
 
 The DJ Set Processor can populate the history workbook that the Contest Playlist Builder reads. Westie Radio runs independently for ongoing playback history.
 
-## Shared Spotify matching
+## Spotify Search
 
-All three tools use the [shared Spotify matcher](shared/spotify_matching.py) when looking up tracks. It checks song titles, artist credits, and recording versions so that a remix or edit can be distinguished from the original. Each tool handles unmatched tracks and updates its own destinations.
+All three tools use the [`spotify_search` package](spotify_search/) when looking up tracks. Set `SPOTIFY_SEARCH_SPREADSHEET_ID` to the same standalone workbook ID for each tool and give each existing Google service account Editor access. Enable the Google Sheets API in each service account's project.
+
+Name the workbook **Spotify Search** and its tab **Track Overrides**. Use these headers in A1:C1: `Artist`, `Title`, `Spotify Track URL`.
+
+On each run a tool looks for the original artist and title in the tab before searching Spotify. Paste a Spotify track URL into an existing row to select that track when the pair is next searched. A blank URL marks a search miss. If a shared matcher fix resolves it, verify the pair without an override and delete the entire sheet row. Contest Playlist Builder uses saved row counters, so updating an override does not retry previously skipped rows.
+
+With the workbook ID unset, the tools use their existing search and failure reporting.
 
 ## Setup
 
