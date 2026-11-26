@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from sync import DIVISIONS, Spotify, SyncError, load_playlist_ids, matching_duration, source_lists, sync
+from sync import DIVISIONS, Spotify, SyncError, checked_json, load_playlist_ids, matching_duration, source_lists, sync
 
 
 def history(artist, title, label):
@@ -10,6 +10,18 @@ def history(artist, title, label):
 
 
 class SyncTests(unittest.TestCase):
+    def test_spotify_429_reports_quota_reason_and_retry_delay(self):
+        response = Mock(ok=False, status_code=429, headers={"Retry-After": "10066"})
+        response.json.return_value = {"error": {"reason": "QUOTA_EXCEEDED"}}
+        with self.assertRaisesRegex(SyncError, "reason=QUOTA_EXCEEDED; Retry-After=10066s"):
+            checked_json(response, "Spotify track search")
+
+    def test_spotify_429_handles_non_json_without_logging_response_content(self):
+        response = Mock(ok=False, status_code=429, headers={})
+        response.json.side_effect = ValueError("body is not JSON")
+        with self.assertRaisesRegex(SyncError, "reason=unknown; Retry-After=unknown"):
+            checked_json(response, "Spotify playlist append")
+
     def setUp(self):
         self.sheets = Mock()
         self.sheets.tabs.return_value = {"2011", "2025", "2012", "notes"}
