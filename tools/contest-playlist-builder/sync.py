@@ -19,6 +19,17 @@ DIVISIONS = {
 }
 STATE = "'Spotify Sync State'"
 FAILED = "'Failed Searches'"
+LEGACY_TRACK_SUFFIXES = (
+    r"\[feat\.[^\]]*\]",
+    r"\(feat\.[^)]*\)",
+    r"\(radio edit\)",
+    r"\(album version\)",
+    r"\(original song[^)]*\)",
+    r"\(clean edit\)",
+    r"\(cleaned\)",
+    r"\(explicit\)",
+    r"\(remastered\)",
+)
 
 
 class SyncError(Exception):
@@ -67,6 +78,12 @@ def build_lists(rows):
                 seen[division].add(key)
                 lists[division].append([artist, title])
     return lists, sorted(labels, key=lambda label: label.encode("utf-16-be"))
+
+
+def legacy_search_title(title):
+    for pattern in LEGACY_TRACK_SUFFIXES:
+        title = re.sub(r"\s*" + pattern, "", title, count=1, flags=re.IGNORECASE)
+    return title.strip()
 
 
 def checked_json(response, operation):
@@ -124,8 +141,9 @@ class Sheets:
 
 
 class Spotify:
-    def __init__(self, session):
+    def __init__(self, session, *, legacy_fallback=False):
         self.session = session
+        self.legacy_fallback = legacy_fallback
         self.access_token = None
 
     def authorize(self):
@@ -152,7 +170,22 @@ class Spotify:
         def api(method, path, **kwargs):
             return self.request(method, path.lstrip("/"), "Spotify track search", **kwargs)
 
-        return find_track(api, cell_text(artist), title, "")
+        artist = cell_text(artist)
+        matched = find_track(api, artist, title, "")
+        if matched or not self.legacy_fallback:
+            return matched
+
+        legacy_title = legacy_search_title(title)
+        if not legacy_title:
+            return None
+        result = api("GET", "/search", params={
+            "q": f"track:{legacy_title} artist:{artist}", "type": "track", "limit": 1,
+        })
+        candidates = result["tracks"]["items"]
+        if not candidates:
+            return None
+        logging.info("Legacy Spotify fallback: %s — %s", artist, title)
+        return candidates[0]["uri"]
 
     def add(self, playlist, tracks):
         for start in range(0, len(tracks), 100):
@@ -299,7 +332,8 @@ def main():
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         with AuthorizedSession(credentials) as google, requests.Session() as spotify:
-            sync(Sheets(google), Spotify(spotify), os.environ["SOURCE_SHEET_ID"],
+            matcher = Spotify(spotify, legacy_fallback=os.environ.get("SPOTIFY_LEGACY_FALLBACK") == "true")
+            sync(Sheets(google), matcher, os.environ["SOURCE_SHEET_ID"],
                  os.environ["OUTPUT_SHEET_ID"], playlist_ids=playlist_ids,
                  check=args.check, summary=args.summary)
     except KeyError as error:

@@ -117,6 +117,37 @@ class SyncTests(unittest.TestCase):
         self.sheets.tabs.assert_not_called()
         self.sheets.write.assert_not_called()
 
+    def test_legacy_search_is_opt_in_and_preserves_existing_match(self):
+        session = Mock()
+        spotify = Spotify(session, legacy_fallback=True)
+        spotify.access_token = "test-token"
+        session.request.return_value.json.return_value = {"tracks": {"items": [
+            {"uri": "spotify:track:correct", "name": "Song (Radio Edit)",
+             "artists": [{"name": "Artist"}]},
+        ]}}
+        self.assertEqual(spotify.search("Artist", "Song (Radio Edit)"), "spotify:track:correct")
+        session.request.assert_called_once()
+
+        session.reset_mock()
+        session.request.return_value.json.return_value = {"tracks": {"items": [
+            {"uri": "spotify:track:album", "name": "Song",
+             "artists": [{"name": "Artist"}]},
+        ]}}
+        strict = Spotify(session)
+        strict.access_token = "test-token"
+        self.assertIsNone(strict.search("Artist", "Song (Radio Edit)"))
+        with self.assertLogs(level="INFO"):
+            self.assertEqual(spotify.search("Artist", "Song (Radio Edit)"), "spotify:track:album")
+        self.assertEqual(session.request.call_args.kwargs["params"],
+                         {"q": "track:Song artist:Artist", "type": "track", "limit": 1})
+
+    def test_legacy_search_returns_none_for_empty_candidate_list(self):
+        session = Mock()
+        spotify = Spotify(session, legacy_fallback=True)
+        spotify.access_token = "test-token"
+        session.request.return_value.json.return_value = {"tracks": {"items": []}}
+        self.assertIsNone(spotify.search("Artist", "Song (Album Version)"))
+
     def test_spotify_search_uses_shared_matcher_and_preserves_version(self):
         session = Mock()
         spotify = Spotify(session)
