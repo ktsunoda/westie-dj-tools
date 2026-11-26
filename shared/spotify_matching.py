@@ -38,7 +38,7 @@ RELEASE_LABEL = re.compile(
     r"\s*(?:[\[(]|\s+-\s+)(?:single version|(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?)"
     r"(?:[\])]$|$)", re.I,
 )
-RADIO_LABEL = re.compile(r"\s*(?:[\[(]|\s+-\s+)radio edit[\])]?$", re.I)
+EDIT_LABEL = re.compile(r"\s*(?:[\[(]|\s+-\s+)(?:radio|short) edit[\])]?$", re.I)
 CONTENT_LABEL = re.compile(
     r"\s*(?:[\[(]|\s+-\s+)(clean(?: version)?|explicit(?: version)?)"
     r"(?:[\])]$|$)", re.I,
@@ -225,7 +225,7 @@ def prefer_clean(track, candidates):
 def recover_track(search, artist, names, candidates, duration_ms):
     lead, *inline_guests = INLINE_FEATURED.split(artist, maxsplit=1)
     expected = {}
-    expected_radio = {}
+    expected_edit = {}
     queries = []
     for name in names:
         cover = COVER_LABEL.search(name)
@@ -241,11 +241,10 @@ def recover_track(search, artist, names, candidates, duration_ms):
             clean = catalog_title
         source = (clean, inline_guests + guests, lookup_name != name, explicit)
         expected.setdefault(equivalent_title_key(clean), []).append(source)
-        if duration_ms is not None:
-            core = RADIO_LABEL.sub("", clean).strip()
-            expected_radio.setdefault(equivalent_title_key(core), []).append(source)
-            if core != clean:
-                queries.append(f"{lead} {core}")
+        core = EDIT_LABEL.sub("", clean).strip()
+        expected_edit.setdefault(equivalent_title_key(core), []).append(source)
+        if core != clean:
+            queries.append(f"{lead} {core}")
         if clean != name or lead != artist:
             queries.append(f"track:{clean} artist:{lead}")
         shorter = RELEASE_LABEL.sub("", SOUNDTRACK_LABEL.sub("", clean)).strip()
@@ -271,21 +270,16 @@ def recover_track(search, artist, names, candidates, duration_ms):
 
     full_title_matches = {}
     shortened_title_matches = {}
-    radio_matches = {}
+    edit_matches = {}
     for track in candidates.values():
-        track_duration = track.get("duration_ms")
-        if duration_ms is not None and track_duration and abs(track_duration - duration_ms) > 3000:
-            continue
         clean, guests = title_and_credits(track["name"])
         sources = expected.get(equivalent_title_key(clean))
-        alternate_radio = not sources and duration_ms is not None and track_duration and (
-            abs(track_duration - duration_ms) <= 900
-        )
-        if alternate_radio:
-            core = RADIO_LABEL.sub("", clean).strip()
+        alternate_edit = not sources
+        if alternate_edit:
+            core = EDIT_LABEL.sub("", clean).strip()
             sources = [
-                source for source in expected_radio.get(equivalent_title_key(core), ())
-                if bool(RADIO_LABEL.search(source[0])) != (core != clean)
+                source for source in expected_edit.get(equivalent_title_key(core), ())
+                if bool(EDIT_LABEL.search(source[0])) != (core != clean)
             ]
         if not sources:
             continue
@@ -309,8 +303,8 @@ def recover_track(search, artist, names, candidates, duration_ms):
             if is_cover and artist_key(track["artists"][0]["name"]) != artist_key(lead):
                 continue
             if all(has_recovery_credit(guest, credits) for guest in (*source_guests, *guests)):
-                if alternate_radio:
-                    matches = radio_matches
+                if alternate_edit:
+                    matches = edit_matches
                 elif full_title == tolerant_key(title_key(source_title)) or (
                     source_release and "remaster" in source_release[0].casefold()
                     and (track_release := RELEASE_LABEL.search(clean))
@@ -320,20 +314,16 @@ def recover_track(search, artist, names, candidates, duration_ms):
                 else:
                     matches = shortened_title_matches
                 matches.setdefault(recording_key(track), track)
-    matches = full_title_matches or shortened_title_matches or radio_matches
+    matches = full_title_matches or shortened_title_matches or edit_matches
     return choose_recording(matches, duration_ms)
 
 
-def recover_verified_recording(search, artist, title, duration_ms):
-    if duration_ms is None:
-        return None
+def recover_verified_recording(search, artist, title):
     isrc = VERIFIED_RECORDINGS.get((artist_key(artist), tolerant_key(title)))
     if not isrc:
         return None
     for track in search(f"isrc:{isrc}"):
         if (track.get("external_ids", {}).get("isrc") == isrc
-                and track.get("duration_ms")
-                and abs(track["duration_ms"] - duration_ms) <= 2000
                 and track.get("is_playable") is not False
                 and track.get("available_markets", True)
                 and not track.get("restrictions")):
@@ -412,4 +402,4 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
         matched = recover_track(search, artist, names, candidates, duration_ms)
     if matched or remix:
         return matched
-    return recover_verified_recording(search, artist, title, duration_ms)
+    return recover_verified_recording(search, artist, title)

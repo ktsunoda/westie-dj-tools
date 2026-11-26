@@ -141,10 +141,10 @@ class SyncTests(unittest.TestCase):
         spotify = Spotify(session, legacy_fallback=True)
         spotify.access_token = "test-token"
         session.request.return_value.json.return_value = {"tracks": {"items": [
-            {"uri": "spotify:track:correct", "name": "Song (Radio Edit)",
+            {"uri": "spotify:track:correct", "name": "Song (Clean Edit)",
              "artists": [{"name": "Artist"}]},
         ]}}
-        self.assertEqual(spotify.search("Artist", "Song (Radio Edit)"), "spotify:track:correct")
+        self.assertEqual(spotify.search("Artist", "Song (Clean Edit)"), "spotify:track:correct")
         session.request.assert_called_once()
 
         session.reset_mock()
@@ -154,9 +154,9 @@ class SyncTests(unittest.TestCase):
         ]}}
         strict = Spotify(session)
         strict.access_token = "test-token"
-        self.assertIsNone(strict.search("Artist", "Song (Radio Edit)"))
+        self.assertIsNone(strict.search("Artist", "Song (Clean Edit)"))
         with self.assertLogs(level="INFO"):
-            self.assertEqual(spotify.search("Artist", "Song (Radio Edit)"), "spotify:track:album")
+            self.assertEqual(spotify.search("Artist", "Song (Clean Edit)"), "spotify:track:album")
         self.assertEqual(session.request.call_args.kwargs["params"],
                          {"q": "track:Song artist:Artist", "type": "track", "limit": 1})
 
