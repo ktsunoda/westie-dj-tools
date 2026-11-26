@@ -9,6 +9,33 @@ class SpotifyMatchingTests(unittest.TestCase):
     def candidate(uri, title, *artists):
         return {"uri": uri, "name": title, "artists": [{"name": name} for name in artists]}
 
+    def test_album_parenthetical_preserves_distinct_recordings(self):
+        artist = "Eva Cassidy"
+        items = []
+        for album, duration in (("Songbird", 242000), ("Simply Eva", 160000)):
+            track = self.candidate(album, f"Wade In The Water ({album})", artist)
+            items.append(dict(track, album={"name": album}, duration_ms=duration))
+        api = Mock(return_value={"tracks": {"items": items}})
+
+        self.assertIsNone(find_track(api, artist, "Wade In The Water", ""))
+        self.assertEqual(find_track(api, artist, "Wade In The Water", "", duration_ms=242000), "Songbird")
+        self.assertEqual(find_track(api, artist, "Wade In The Water", "", duration_ms=160000), "Simply Eva")
+
+    def test_subtitle_retry_requires_matching_duration_and_preserves_versions(self):
+        studio = dict(self.candidate("studio", "Breakeven", "The Script"), duration_ms=261000)
+        live = dict(self.candidate("live", "Breakeven (Live)", "The Script"), duration_ms=261000)
+
+        def api(method, path, *, params):
+            return {"tracks": {"items": [studio, live]
+                               if params["q"] == "track:Breakeven artist:The Script" else []}}
+
+        self.assertEqual(find_track(api, "The Script", "Breakeven (Falling to Pieces)", "",
+                                    duration_ms=261000), "studio")
+        self.assertIsNone(find_track(api, "The Script", "Breakeven (Falling to Pieces)", "",
+                                     duration_ms=215000))
+        self.assertIsNone(find_track(api, "The Script", "Breakeven (Radio Edit)", "",
+                                     duration_ms=261000))
+
     def test_search_recovers_reported_credit_differences(self):
         cases = [
             ("Feder & UPSAHL", "Let There Be Drums", "Let There Be Drums", ("Feder", "UPSAHL")),
