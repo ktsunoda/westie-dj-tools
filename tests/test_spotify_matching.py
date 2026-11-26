@@ -203,3 +203,17 @@ class SpotifyMatchingTests(unittest.TestCase):
             find_track(api, "Tove Lo", "How Long (From ”Euphoria” An HBO Original Series)", ""),
             "existing-release",
         )
+
+    def test_recovery_treats_different_releases_of_same_recording_as_one_match(self):
+        releases = [
+            self.candidate("compilation", "Finesse (feat. Cardi B) - Remix", "Bruno Mars", "Cardi B"),
+            self.candidate("single", "Finesse - Remix; feat. Cardi B", "Bruno Mars", "Cardi B"),
+        ]
+        for track in releases:
+            track["external_ids"] = {"isrc": "USAT21705441"}
+        api = Mock(return_value={"tracks": {"items": releases}})
+
+        self.assertIn(
+            find_track(api, "Bruno Mars", "Finesse (Remix) [feat. Cardi B]", ""),
+            {"compilation", "single"},
+        )
