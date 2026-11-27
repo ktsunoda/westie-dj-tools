@@ -32,11 +32,34 @@ class SyncTests(unittest.TestCase):
         sheet.write.assert_called_once_with(
             [{"range": "'Spotify Playlists'!B2:D2", "values": [["After", "url", "Public"]]}]
         )
-        sheet.append.assert_called_once_with(
+        sheet.insert_at_top.assert_called_once_with(
             [
                 ["public", "Unparsed title", "url", "Public", sync.APPROVED, ""],
                 ["private", "Private", "url", "Private", sync.IGNORED, "Private playlist"],
             ]
+        )
+        self.assertEqual([item[0] for item in sheet.method_calls], ["read", "write", "insert_at_top"])
+
+    def test_new_playlists_are_inserted_below_header_in_one_batch(self):
+        session = Mock()
+        session.get.return_value.json.return_value = {"sheets": [{"properties": {"sheetId": 42}}]}
+        sheet = sync.PlaylistSheet(session, "workbook")
+        sheet.insert_at_top([])
+        session.get.assert_not_called()
+        session.post.assert_not_called()
+
+        sheet.insert_at_top([["one", "=literal"], ["two", "Second"]])
+
+        self.assertTrue(session.post.call_args.args[0].endswith("/workbook:batchUpdate"))
+        insert, write = session.post.call_args.kwargs["json"]["requests"]
+        self.assertEqual(
+            insert["insertDimension"]["range"],
+            {"sheetId": 42, "dimension": "ROWS", "startIndex": 1, "endIndex": 3},
+        )
+        self.assertEqual(write["updateCells"]["start"], {"sheetId": 42, "rowIndex": 1, "columnIndex": 0})
+        self.assertEqual(
+            write["updateCells"]["rows"][0]["values"][1],
+            {"userEnteredValue": {"stringValue": "=literal"}},
         )
 
     def test_missing_event_is_retried_without_reapproval(self):
