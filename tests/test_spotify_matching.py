@@ -23,7 +23,7 @@ class SpotifyMatchingTests(unittest.TestCase):
         self.assertEqual(find_track(api, artist, "Wade In The Water", "", duration_ms=242000), "Songbird")
         self.assertEqual(find_track(api, artist, "Wade In The Water", "", duration_ms=160000), "Simply Eva")
 
-    def test_subtitle_retry_requires_matching_duration_and_preserves_versions(self):
+    def test_subtitle_retry_accepts_shortened_edits_and_preserves_versions(self):
         studio = dict(self.candidate("studio", "Breakeven", "The Script"), duration_ms=261000)
         live = dict(self.candidate("live", "Breakeven (Live)", "The Script"), duration_ms=261000)
 
@@ -33,8 +33,9 @@ class SpotifyMatchingTests(unittest.TestCase):
 
         self.assertEqual(find_track(api, "The Script", "Breakeven (Falling to Pieces)", "",
                                     duration_ms=261000), "studio")
-        self.assertIsNone(find_track(api, "The Script", "Breakeven (Falling to Pieces)", "",
-                                     duration_ms=215000))
+        self.assertEqual(find_track(api, "The Script", "Breakeven (Falling to Pieces)", "",
+                                    duration_ms=120000), "studio")
+        self.assertEqual(find_track(api, "The Script", "Breakeven (Falling to Pieces)", ""), "studio")
         self.assertIsNone(find_track(api, "The Script", "Breakeven (Radio Edit)", "",
                                      duration_ms=261000))
 
@@ -59,7 +60,7 @@ class SpotifyMatchingTests(unittest.TestCase):
                 query = api.call_args.kwargs["params"]["q"]
                 self.assertEqual(query, f"track:{catalog_title} artist:{credits[0]}")
 
-    def test_search_uses_unambiguous_parenthetical_artist_credit(self):
+    def test_search_ranks_matches_with_parenthetical_artist_credit(self):
         studio = self.candidate("studio", "If You're Over Me", "Olly Alexander (Years & Years)")
         acoustic = self.candidate(
             "acoustic", "If You're Over Me - Acoustic", "Olly Alexander (Years & Years)"
@@ -73,7 +74,7 @@ class SpotifyMatchingTests(unittest.TestCase):
 
         ambiguous = dict(acoustic, uri="another-recording")
         api.return_value = {"tracks": {"items": [acoustic, ambiguous]}}
-        self.assertIsNone(find_track(api, "Years & Years", source_title, ""))
+        self.assertEqual(find_track(api, "Years & Years", source_title, ""), "acoustic")
 
     def test_search_matches_a_different_parenthetical_artist_credit(self):
         candidate = self.candidate("match", "Evening Lights", "New Name (Former Name)")
@@ -131,13 +132,13 @@ class SpotifyMatchingTests(unittest.TestCase):
         self.assertEqual(find_track(api, "Phlake & Mercedes the Virus",
                                        "Aliens Need Love Too", ""), "match")
 
-    def test_lead_artist_fallback_skips_distinct_recordings(self):
+    def test_lead_artist_fallback_uses_search_order_when_duration_is_far_off(self):
         api = Mock(side_effect=[
-            {"tracks": {"items": [self.candidate("one", "Song", "Artist")]}},
-            {"tracks": {"items": [self.candidate("two", "Song", "Artist")]}},
+            {"tracks": {"items": [dict(self.candidate("one", "Song", "Artist"), duration_ms=240000)]}},
+            {"tracks": {"items": [dict(self.candidate("two", "Song", "Artist"), duration_ms=180000)]}},
             {"tracks": {"items": []}},
         ])
-        self.assertIsNone(find_track(api, "Artist & Guest", "Song", ""))
+        self.assertEqual(find_track(api, "Artist & Guest", "Song", "", duration_ms=120000), "one")
 
     def test_lead_artist_fallback_accepts_releases_of_same_recording(self):
         candidates = [self.candidate(uri, "Song - Radio Edit", "Artist") for uri in ("single", "album")]

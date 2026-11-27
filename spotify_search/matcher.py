@@ -176,7 +176,7 @@ def is_clean_counterpart(clean, explicit):
             == [a.get("id") or artist_key(a["name"]) for a in explicit["artists"]])
 
 
-def choose_recording(matches, duration_ms=None, *, allow_ranked_match=False):
+def choose_recording(matches, duration_ms=None):
     if len(matches) == 1:
         return next(iter(matches.values()))["uri"]
     if len(matches) == 2:
@@ -186,16 +186,13 @@ def choose_recording(matches, duration_ms=None, *, allow_ranked_match=False):
         if is_clean_counterpart(second, first):
             return second["uri"]
     if duration_ms is not None:
-        for tolerance in (500, 2000):
-            close = [track for track in matches.values() if track.get("duration_ms")
-                     and abs(track["duration_ms"] - duration_ms) <= tolerance]
-            if close:
-                if allow_ranked_match:
-                    return min(close, key=lambda track: abs(track["duration_ms"] - duration_ms))["uri"]
-                if len(close) == 1:
-                    return close[0]["uri"]
-                break
-    if allow_ranked_match and matches:
+        close = [
+            track for track in matches.values()
+            if track.get("duration_ms") and abs(track["duration_ms"] - duration_ms) <= 2000
+        ]
+        if close:
+            return min(close, key=lambda track: abs(track["duration_ms"] - duration_ms))["uri"]
+    if matches:
         return next(iter(matches.values()))["uri"]
     return None
 
@@ -218,13 +215,12 @@ def parenthetical_title(title):
 def recover_parenthetical(search, artist, names, candidates, duration_ms):
     source_titles = {title_key(name) for name in names}
     subtitle_titles = set()
-    if duration_ms is not None:
-        for name in names:
-            base, subtitle = parenthetical_title(name)
-            if subtitle and title_and_credits(name) == (name, []):
-                subtitle_titles.add(title_key(base))
-                for track in search(f"track:{base} artist:{artist}"):
-                    candidates[track["uri"]] = track
+    for name in names:
+        base, subtitle = parenthetical_title(name)
+        if subtitle and title_and_credits(name) == (name, []):
+            subtitle_titles.add(title_key(base))
+            for track in search(f"track:{base} artist:{artist}"):
+                candidates[track["uri"]] = track
 
     album_matches = {}
     subtitle_matches = {}
@@ -237,10 +233,9 @@ def recover_parenthetical(search, artist, names, candidates, duration_ms):
         key = recording_key(track)
         if suffix and normalized(suffix) == normalized(album) and title_key(base) in source_titles:
             album_matches.setdefault(key, track)
-        if (title_key(name) in subtitle_titles and track.get("duration_ms")
-                and abs(track["duration_ms"] - duration_ms) <= 2000):
+        if title_key(name) in subtitle_titles:
             subtitle_matches.setdefault(key, track)
-    return choose_recording(album_matches or subtitle_matches, duration_ms, allow_ranked_match=bool(album_matches))
+    return choose_recording(album_matches or subtitle_matches, duration_ms)
 
 
 def recover_track(search, artist, names, candidates, duration_ms):
@@ -352,7 +347,7 @@ def recover_track(search, artist, names, candidates, duration_ms):
                 matches.setdefault(recording_key(track), track)
     matches = full_title_matches or shortened_title_matches or acoustic_matches or edit_matches
     if matches:
-        return choose_recording(matches, duration_ms, allow_ranked_match=True)
+        return choose_recording(matches, duration_ms)
     return recover_parenthetical(search, artist, names, candidates, duration_ms)
 
 
@@ -433,10 +428,10 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
             if allow_lead_match and lead_credit in artists:
                 lead_matches.setdefault(recording, item)
         if exact_matches:
-            uri = choose_recording(exact_matches, duration_ms, allow_ranked_match=True)
+            uri = choose_recording(exact_matches, duration_ms)
             return prefer_clean(candidates[uri], items)
         if fallback and index >= exact_query_count - 1:
-            uri = choose_recording(fallback, duration_ms, allow_ranked_match=True)
+            uri = choose_recording(fallback, duration_ms)
             return prefer_clean(candidates[uri], candidates.values())
     if alias_matches or lead_matches:
         return choose_recording(alias_matches or lead_matches, duration_ms)
