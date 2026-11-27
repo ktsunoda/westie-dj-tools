@@ -5,7 +5,9 @@ Run this standalone job daily. It refreshes owned Spotify playlists in the
 approved public playlists. The tab can start empty. The job adds its header row
 and uses the Spotify playlist ID to update metadata while preserving approval
 and ignore decisions. Newly discovered playlists are inserted directly below
-the header.
+the header. New rows copy cell formatting, dropdown validation, and conditional
+formatting from the row immediately below them. Playlist values are generated
+for each new row.
 
 | Status | Meaning |
 | --- | --- |

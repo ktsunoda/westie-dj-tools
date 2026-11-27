@@ -33,13 +33,13 @@ class SyncTests(unittest.TestCase):
         sheet.write.assert_called_once_with(
             [{"range": "'Spotify Playlists'!B2:D2", "values": [["After", "url", "Public"]]}]
         )
-        sheet.insert_at_top_and_center_status.assert_called_once_with(
+        sheet.insert_at_top.assert_called_once_with(
             [
                 ["public", "2026.11.01 Local Social", "url", "Public", sync.APPROVED, ""],
                 ["private", "Private", "url", "Private", sync.IGNORED, "Private playlist"],
             ]
         )
-        self.assertEqual([item[0] for item in sheet.method_calls], ["read", "write", "insert_at_top_and_center_status"])
+        self.assertEqual([item[0] for item in sheet.method_calls], ["read", "write", "insert_at_top"])
 
     def test_auto_approval_requires_a_full_date_and_unique_local_event(self):
         events = {
@@ -73,31 +73,27 @@ class SyncTests(unittest.TestCase):
         session = Mock()
         session.get.return_value.json.return_value = {"sheets": [{"properties": {"sheetId": 42}}]}
         sheet = sync.PlaylistSheet(session, "workbook")
-        sheet.insert_at_top_and_center_status([])
-        alignment_only = session.post.call_args.kwargs["json"]["requests"]
-        self.assertEqual(len(alignment_only), 1)
+        sheet.insert_at_top([])
+        session.get.assert_not_called()
+        session.post.assert_not_called()
 
-        sheet.insert_at_top_and_center_status([["one", "=literal"], ["two", "Second"]])
+        sheet.insert_at_top([["one", "=literal"], ["two", "Second"]])
 
         self.assertTrue(session.post.call_args.args[0].endswith("/workbook:batchUpdate"))
-        insert, write, unbold, align = session.post.call_args.kwargs["json"]["requests"]
-        self.assertEqual(unbold["repeatCell"], {
-            "range": {
-                "sheetId": 42,
-                "startRowIndex": 1,
-                "endRowIndex": 3,
-                "startColumnIndex": 0,
-                "endColumnIndex": len(sync.HEADERS),
-            },
-            "cell": {"userEnteredFormat": {"textFormat": {"bold": False}}},
-            "fields": "userEnteredFormat.textFormat.bold",
-        })
-        self.assertEqual(alignment_only, [align])
-        self.assertEqual(align["repeatCell"], {
-            "range": {"sheetId": 42, "startRowIndex": 1, "startColumnIndex": 4, "endColumnIndex": 5},
-            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
-            "fields": "userEnteredFormat.horizontalAlignment",
-        })
+        insert, *copies, write = session.post.call_args.kwargs["json"]["requests"]
+        self.assertEqual(
+            [request["copyPaste"]["pasteType"] for request in copies],
+            ["PASTE_FORMAT", "PASTE_DATA_VALIDATION", "PASTE_CONDITIONAL_FORMATTING"],
+        )
+        columns = {"sheetId": 42, "startColumnIndex": 0, "endColumnIndex": len(sync.HEADERS)}
+        for request in copies:
+            self.assertEqual(
+                request["copyPaste"]["source"], {**columns, "startRowIndex": 3, "endRowIndex": 4}
+            )
+            self.assertEqual(
+                request["copyPaste"]["destination"], {**columns, "startRowIndex": 1, "endRowIndex": 3}
+            )
+        self.assertEqual(write["updateCells"]["fields"], "userEnteredValue")
         self.assertEqual(
             insert["insertDimension"]["range"],
             {"sheetId": 42, "dimension": "ROWS", "startIndex": 1, "endIndex": 3},
