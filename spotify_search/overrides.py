@@ -4,10 +4,13 @@ import hashlib
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 TAB = "Track Overrides"
 HEADERS = ("Artist", "Title", "Spotify Track URL")
 STATUS_HEADER = "Status"
+LAST_ACCESSED_HEADER = "Last Accessed"
+OPTIONAL_HEADERS = (STATUS_HEADER, LAST_ACCESSED_HEADER)
 TRACK_URL = re.compile(r"https://open\.spotify\.com/(?:intl-[a-zA-Z-]+/)?track/([A-Za-z0-9]{22})(?:[?#].*)?")
 
 
@@ -23,6 +26,7 @@ class TrackOverrides:
         self.columns = {}
         self.mapping = {}
         self.pairs = set()
+        self.accessed_rows = {}
 
     @classmethod
     def from_env(cls, session):
@@ -47,10 +51,15 @@ class TrackOverrides:
             for row in sheet["data"][0].get("rowData", [])
         ]
         header = rows[0] if rows else []
-        if any(header.count(name) != 1 for name in HEADERS) or header.count(STATUS_HEADER) > 1:
+        if any(header.count(name) != 1 for name in HEADERS) or any(
+            header.count(name) > 1 for name in OPTIONAL_HEADERS
+        ):
             raise TrackOverridesError(f"{TAB} has unexpected headers")
         columns = {name: header.index(name) for name in HEADERS}
+        columns.update({name: header.index(name) for name in OPTIONAL_HEADERS if name in header})
+        date_column = columns.get(LAST_ACCESSED_HEADER)
         pairs, mapping = set(), {}
+        accessed_rows = {}
         for index, row in enumerate(rows[1:], 2):
             artist, title, url = (
                 row[columns[name]] if columns[name] < len(row) else "" for name in HEADERS
@@ -59,6 +68,9 @@ class TrackOverrides:
                 continue
             key = (artist, title)
             pairs.add(key)
+            if key not in accessed_rows or (url.strip() and key not in mapping):
+                accessed = row[date_column] if date_column is not None and date_column < len(row) else ""
+                accessed_rows[key] = (index - 1, accessed)
             if url.strip():
                 match = TRACK_URL.fullmatch(url.strip())
                 if not match:
@@ -66,11 +78,10 @@ class TrackOverrides:
                 uri = f"spotify:track:{match[1]}"
                 if mapping.setdefault(key, uri) != uri:
                     raise TrackOverridesError(f"Conflicting Spotify track URLs in {TAB} row {index}")
-        if STATUS_HEADER in header:
-            columns[STATUS_HEADER] = header.index(STATUS_HEADER)
         self.columns = columns
         self.mapping = mapping
         self.pairs = pairs
+        self.accessed_rows = accessed_rows
         self.sheet_id = sheet["properties"]["sheetId"]
         return self.mapping
 
@@ -78,7 +89,12 @@ class TrackOverrides:
         """Return the exact pair's override or queue an unknown pair for review."""
         self.load()
         key = (artist, title)
-        if not artist.strip() or not title.strip() or key in self.pairs:
+        if not artist.strip() or not title.strip():
+            return None
+        today = datetime.now(timezone.utc).date().isoformat()
+        if key in self.pairs:
+            self._touch(key, today)
+        if key in self.pairs:
             return self.mapping.get(key)
         value = json.dumps(key, ensure_ascii=False)
         digest = hashlib.sha256(value.encode()).digest()
@@ -86,6 +102,8 @@ class TrackOverrides:
         row = {"sheetId": self.sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": 2}
         for offset in range(5):
             cells = {"Artist": artist, "Title": title}
+            if LAST_ACCESSED_HEADER in self.columns:
+                cells[LAST_ACCESSED_HEADER] = today
             status_format = []
             if STATUS_HEADER in self.columns:
                 cells[STATUS_HEADER] = "⏳"
@@ -129,10 +147,34 @@ class TrackOverrides:
             # metadata may remain on a row whose cells were edited or cleared.
             self.load(refresh=True)
             if key in self.pairs:
+                self._touch(key, today)
                 return self.mapping.get(key)
         else:
             raise TrackOverridesError(f"Could not allocate a unique review row in {TAB}")
         self.pairs.add(key)
+        self.accessed_rows[key] = (1, today)
+
+    def _touch(self, key, today):
+        if LAST_ACCESSED_HEADER not in self.columns or self.accessed_rows[key][1] == today:
+            return
+        # Other writes can insert rows above this pair, so locate it again before updating.
+        self.load(refresh=True)
+        if LAST_ACCESSED_HEADER not in self.columns or key not in self.pairs:
+            return
+        row, accessed = self.accessed_rows[key]
+        if accessed == today:
+            return
+        response = self.session.post(f"{self.url}:batchUpdate", json={"requests": [
+            {"updateCells": {
+                "start": {"sheetId": self.sheet_id, "rowIndex": row,
+                          "columnIndex": self.columns[LAST_ACCESSED_HEADER]},
+                "rows": [{"values": [{"userEnteredValue": {"stringValue": today}}]}],
+                "fields": "userEnteredValue",
+            }},
+        ]}, timeout=30)
+        if not response.ok:
+            raise TrackOverridesError(f"Updating {LAST_ACCESSED_HEADER} returned HTTP {response.status_code}")
+        self.accessed_rows[key] = (row, today)
 
     @staticmethod
     def _write_error(response):
