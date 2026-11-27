@@ -1,5 +1,6 @@
 """Refresh the Spotify playlist inventory and publish approved social sets."""
 
+import argparse
 import logging
 import os
 import re
@@ -222,13 +223,16 @@ def process_queue(sheet, session, api_key, playlists):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--inventory-only", action="store_true", help="Refresh Spotify and Sheets only")
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     mode = os.getenv("AUTO_APPROVE", "false").strip().lower()
     if mode not in {"true", "false"}:
         raise SystemExit("AUTO_APPROVE must be true or false")
     try:
         spreadsheet = os.environ["SPOTIFY_PLAYLIST_SPREADSHEET_ID"]
-        api_key = os.environ["SWINGSTATION_API_KEY"]
+        api_key = None if args.inventory_only else os.environ["SWINGSTATION_API_KEY"]
         client_id = os.environ["SPOTIFY_CLIENT_ID"]
         refresh_token = os.environ["SPOTIFY_REFRESH_TOKEN"]
         credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/spreadsheets"])
@@ -236,7 +240,8 @@ def main():
             sheet = PlaylistSheet(google_session, spreadsheet)
             playlists = list_owned_playlists(session, client_id, refresh_token)
             refresh_inventory(sheet, playlists, mode == "true")
-            process_queue(sheet, session, api_key, playlists)
+            if not args.inventory_only:
+                process_queue(sheet, session, api_key, playlists)
     except KeyError as exc:
         raise SystemExit(f"Missing required configuration or response field: {exc}") from None
     except RuntimeError as exc:

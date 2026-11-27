@@ -39,3 +39,7 @@ Install with `python -m pip install -r tools/swingstation-sync/requirements.txt`
 Set the environment variables and run
 `python tools/swingstation-sync/sync.py`. Use a single daily job so runs do not
 overlap. A run can publish any approved row.
+
+Use `python tools/swingstation-sync/sync.py --inventory-only` to refresh the
+workbook without contacting SwingStation. This mode requires no
+`SWINGSTATION_API_KEY`.
