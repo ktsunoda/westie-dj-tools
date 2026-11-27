@@ -13,7 +13,9 @@ with the service account as Editor. On the first run, the job renames the
 workbook and its first tab, sets up the headers, column widths and Status
 dropdown, and adds three live views. **Needs Action** shows ⏸️ and ❌,
 **Pending** shows ▶️, and **On SwingStation** shows ✅. Edit statuses in
-**Spotify Playlists**. The setup only runs on a workbook with one empty tab.
+**Spotify Playlists**, or open its saved **Needs Action** filter view from
+**Data → Change view** to edit only ⏸️ and ❌ rows. The main tab opens
+unfiltered. Setup only runs on a workbook with one empty tab.
 
 | Status | Meaning |
 | --- | --- |

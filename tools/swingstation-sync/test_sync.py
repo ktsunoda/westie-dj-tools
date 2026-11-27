@@ -24,6 +24,19 @@ class SyncTests(unittest.TestCase):
         batch = session.post.call_args.kwargs["json"]["requests"]
         self.assertEqual(batch[0]["updateSpreadsheetProperties"]["properties"]["title"], "SwingStation Sync")
         self.assertEqual(batch[1]["updateSheetProperties"]["properties"]["title"], "Spotify Playlists")
+        filters = [r["addFilterView"]["filter"] for r in batch if "addFilterView" in r]
+        self.assertEqual(filters, [{
+            "title": "Needs Action",
+            "range": {"sheetId": 0, "startRowIndex": 0, "startColumnIndex": 0,
+                      "endColumnIndex": len(sync.HEADERS)},
+            "filterSpecs": [{
+                "columnIndex": 4,
+                "filterCriteria": {"condition": {
+                    "type": "CUSTOM_FORMULA",
+                    "values": [{"userEnteredValue": '=OR(INDEX($E:$E,ROW())="⏸️",INDEX($E:$E,ROW())="❌")'}],
+                }},
+            }],
+        }])
         self.assertEqual(
             [r["addSheet"]["properties"]["title"] for r in batch if "addSheet" in r],
             ["Needs Action", "Pending", "On SwingStation"],

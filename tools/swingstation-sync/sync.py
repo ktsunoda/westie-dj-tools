@@ -121,6 +121,20 @@ def workbook_setup_requests(sheet_id):
             },
             "fields": "title,gridProperties.frozenRowCount",
         }},
+        {"addFilterView": {"filter": {
+            "title": "Needs Action",
+            "range": {"sheetId": sheet_id, "startRowIndex": 0, "startColumnIndex": 0,
+                      "endColumnIndex": len(HEADERS)},
+            "filterSpecs": [{
+                "columnIndex": HEADERS.index("Status"),
+                "filterCriteria": {"condition": {
+                    "type": "CUSTOM_FORMULA",
+                    "values": [{"userEnteredValue": (
+                        f'=OR(INDEX($E:$E,ROW())="{PAUSED}",INDEX($E:$E,ROW())="{ERROR}")'
+                    )}],
+                }},
+            }],
+        }}},
     ]
     tabs = [(sheet_id, None)]
     view_ids = (candidate for candidate in range(len(VIEWS) + 1) if candidate != sheet_id)
