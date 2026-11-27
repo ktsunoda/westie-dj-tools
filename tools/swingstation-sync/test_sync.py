@@ -132,6 +132,27 @@ class SyncTests(unittest.TestCase):
             [{"range": "'Spotify Playlists'!E2:F2", "values": [[sync.DONE, ""]]}]
         )
 
+    def test_convention_uses_full_date_without_start_time(self):
+        session = Mock()
+        event = {"id": "convention-id", "type": "convention", "name": "Convention"}
+        response = session.post.return_value
+        response.status_code = 201
+
+        self.assertEqual(sync.publish(session, "key", event, date(2026, 3, 21), "url"), (sync.DONE, ""))
+        self.assertEqual(
+            session.post.call_args.kwargs["json"],
+            {"spotify_url": "url", "event_id": "convention-id", "date": "2026-03-21"},
+        )
+
+        response.status_code = 400
+        response.json.return_value = {
+            "error": {"code": "missing_field", "message": "start_time is required for a convention social set"}
+        }
+        self.assertEqual(
+            sync.publish(session, "key", event, date(2026, 3, 21), "url"),
+            (sync.ERROR, "SwingStation requires a start time for convention socials"),
+        )
+
     def test_only_approved_bad_title_gets_an_error(self):
         sheet, session = Mock(), Mock()
         paused = ["paused", "bad title", "url", "Public", sync.PAUSED, ""]

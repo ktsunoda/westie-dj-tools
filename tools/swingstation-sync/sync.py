@@ -222,9 +222,7 @@ def event_index(session):
 
 
 def publish(session, api_key, event, played, playlist_url):
-    if event["type"] == "convention":
-        return ERROR, "Convention upload unavailable until SwingStation's date requirements are verified"
-    if event["type"] != "local event":
+    if event["type"] not in {"local event", "convention"}:
         return ERROR, "Unsupported SwingStation event type"
     try:
         response = session.post(
@@ -241,13 +239,16 @@ def publish(session, api_key, event, played, playlist_url):
         logging.warning("SwingStation upload deferred (HTTP %s)", response.status_code)
         return None
     try:
-        code = response.json().get("error", {}).get("code", "")
+        error = response.json().get("error", {})
     except ValueError:
-        code = ""
+        error = {}
+    code = error.get("code", "")
     if response.status_code == 409 and code == "already_uploaded":
         return DONE, ""
     if code == "event_not_found":
         return ERROR, EVENT_MISSING + event["name"]
+    if code == "missing_field" and "start_time is required" in error.get("message", ""):
+        return ERROR, "SwingStation requires a start time for convention socials"
     if code and re.fullmatch(r"[a-z0-9_]+", code):
         return ERROR, f"SwingStation upload failed: {code} (HTTP {response.status_code})"
     return ERROR, f"SwingStation upload failed (HTTP {response.status_code})"

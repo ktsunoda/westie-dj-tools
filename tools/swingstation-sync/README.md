@@ -20,10 +20,9 @@ Approved titles start with a date in `YYYY.MM.DD`, `YYYY-MM-DD`, or
 and repeated spaces and requires a unique result. The job keeps approved rows
 eligible after temporary upload failures.
 
-Local socials publish with the full date. Convention socials require
-verification of the month/year submission against the SwingStation API before
-the job can publish them. Until then, the job marks convention rows ❌ and
-explains why.
+Approved local and convention socials send the full playlist date. The job
+omits the start time. If SwingStation requires a start time for a convention,
+the job marks the row ❌ with that reason.
 
 ## Auto-approval
 
