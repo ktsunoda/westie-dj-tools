@@ -12,10 +12,17 @@ import google.auth
 import requests
 from google.auth.transport.requests import AuthorizedSession
 
+WORKBOOK_NAME = "SwingStation Sync"
 TAB_NAME = "Spotify Playlists"
 TAB = f"'{TAB_NAME}'"
 HEADERS = ["Spotify Playlist ID", "Name", "Spotify URL", "Visibility", "Status", "Reason"]
 PAUSED, APPROVED, DONE, ERROR, IGNORED = "⏸️", "▶️", "✅", "❌", "🚫"
+COLUMN_WIDTHS = (205, 285, 105, 80, 72, 420)
+VIEWS = (
+    ("Needs Action", (PAUSED, ERROR), "No playlists need action"),
+    ("Pending", (APPROVED,), "No pending playlists"),
+    ("On SwingStation", (DONE,), "Nothing on SwingStation yet"),
+)
 EVENT_MISSING = "Event not found: "
 SPOTIFY = "https://api.spotify.com/v1"
 SWINGSTATION = "https://www.swingstation.app/api/v1"
@@ -43,7 +50,20 @@ def parse_title(title):
         )
     except ValueError as exc:
         raise ValueError("Invalid calendar date in playlist title") from exc
-    return played, event
+    start_time = None
+    suffix = re.search(r"\s+\((\d+:[^()]*)\)$", event)
+    if suffix:
+        time_match = re.fullmatch(r"(\d{1,2}):(\d{2})", suffix[1])
+        if not time_match:
+            raise ValueError("Use a 24-hour start time like (23:00)")
+        hour, minute = map(int, time_match.groups())
+        if hour > 23 or minute > 59:
+            raise ValueError("Use a valid 24-hour start time like (23:00)")
+        event = event[:suffix.start()]
+        start_time = f"{hour:02d}:{minute:02d}"
+    elif re.fullmatch(r"\(\d+:[^()]*\)", event):
+        raise ValueError("Add an event name before the start time")
+    return played, event, start_time
 
 
 def normalize_name(name):
@@ -88,14 +108,143 @@ def list_owned_playlists(session, client_id, refresh_token):
     return playlists
 
 
+def workbook_setup_requests(sheet_id):
+    requests = [
+        {"updateSpreadsheetProperties": {
+            "properties": {"title": WORKBOOK_NAME}, "fields": "title",
+        }},
+        {"updateSheetProperties": {
+            "properties": {
+                "sheetId": sheet_id,
+                "title": TAB_NAME,
+                "gridProperties": {"frozenRowCount": 1},
+            },
+            "fields": "title,gridProperties.frozenRowCount",
+        }},
+        {"addFilterView": {"filter": {
+            "title": "Needs Action",
+            "range": {"sheetId": sheet_id, "startRowIndex": 0, "startColumnIndex": 0,
+                      "endColumnIndex": len(HEADERS)},
+            "filterSpecs": [{
+                "columnIndex": HEADERS.index("Status"),
+                "filterCriteria": {"condition": {
+                    "type": "CUSTOM_FORMULA",
+                    "values": [{"userEnteredValue": (
+                        f'=OR(INDEX($E:$E,ROW())="{PAUSED}",INDEX($E:$E,ROW())="{ERROR}")'
+                    )}],
+                }},
+            }],
+        }}},
+    ]
+    tabs = [(sheet_id, None)]
+    view_ids = (candidate for candidate in range(len(VIEWS) + 1) if candidate != sheet_id)
+    for name, statuses, empty_message in VIEWS:
+        view_id = next(view_ids)
+        requests.append({"addSheet": {"properties": {
+            "sheetId": view_id, "title": name, "gridProperties": {"frozenRowCount": 1},
+        }}})
+        condition = "+".join(f'({TAB}!E:E="{status}")' for status in statuses)
+        formula = f'=IFNA(FILTER({TAB}!A:F,{condition}),"{empty_message}")'
+        tabs.append((view_id, formula))
+
+    for tab_id, formula in tabs:
+        header = {
+            "values": [
+                {"userEnteredValue": {"stringValue": title}, "userEnteredFormat": {
+                    "textFormat": {"bold": True},
+                    "backgroundColor": {"red": 0.85, "green": 0.90, "blue": 0.98},
+                }}
+                for title in HEADERS
+            ],
+        }
+        rows = [header]
+        if formula:
+            rows.append({"values": [{"userEnteredValue": {"formulaValue": formula}}]})
+        requests.append({"updateCells": {
+            "start": {"sheetId": tab_id, "rowIndex": 0, "columnIndex": 0},
+            "rows": rows,
+            "fields": "userEnteredValue,userEnteredFormat",
+        }})
+        for column, width in enumerate(COLUMN_WIDTHS):
+            requests.append({"updateDimensionProperties": {
+                "range": {
+                    "sheetId": tab_id, "dimension": "COLUMNS",
+                    "startIndex": column, "endIndex": column + 1,
+                },
+                "properties": {"pixelSize": width},
+                "fields": "pixelSize",
+            }})
+        status_range = {
+            "sheetId": tab_id, "startRowIndex": 1, "startColumnIndex": 4, "endColumnIndex": 5,
+        }
+        requests.append({"repeatCell": {
+            "range": status_range,
+            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+            "fields": "userEnteredFormat.horizontalAlignment",
+        }})
+        if formula is None:
+            requests.append({"setDataValidation": {
+                "range": status_range,
+                "rule": {
+                    "condition": {"type": "ONE_OF_LIST", "values": [
+                        {"userEnteredValue": status}
+                        for status in (PAUSED, APPROVED, DONE, ERROR, IGNORED)
+                    ]},
+                    "strict": True,
+                    "showCustomUi": True,
+                },
+            }})
+    return requests
+
+
 class PlaylistSheet:
     def __init__(self, session, spreadsheet):
         self.session = session
         self.url = f"https://sheets.googleapis.com/v4/spreadsheets/{quote(spreadsheet, safe='')}"
 
-    def read(self):
+    def initialize_empty_workbook(self):
+        response = self.session.get(
+            self.url,
+            params={"fields": "sheets(properties(sheetId,title,sheetType,gridProperties))"},
+            timeout=TIMEOUT,
+        )
+        sheets = checked_json(response, "Inspect workbook for first-run setup")["sheets"]
+        if len(sheets) != 1 or sheets[0]["properties"].get("sheetType") != "GRID":
+            raise RuntimeError("Workbook setup requires exactly one empty grid tab")
+        properties = sheets[0]["properties"]
+        title = "'" + properties["title"].replace("'", "''") + "'"
+        response = self.session.get(
+            f"{self.url}/values/{quote(title, safe='')}",
+            params={"valueRenderOption": "FORMULA"},
+            timeout=TIMEOUT,
+        )
+        if checked_json(response, "Check the entire tab for existing data").get("values"):
+            raise RuntimeError("Workbook setup requires an empty tab")
+
+        sheet_id = properties["sheetId"]
+        grid = properties["gridProperties"]
+        requests = workbook_setup_requests(sheet_id)
+        for dimension, count, minimum in (
+            ("ROWS", grid["rowCount"], 1000), ("COLUMNS", grid["columnCount"], len(HEADERS))
+        ):
+            if count < minimum:
+                requests.insert(0, {"appendDimension": {
+                    "sheetId": sheet_id, "dimension": dimension, "length": minimum - count,
+                }})
+        response = self.session.post(
+            f"{self.url}:batchUpdate", json={"requests": requests}, timeout=TIMEOUT,
+        )
+        checked_json(response, "Initialize SwingStation Sync workbook")
+
+    def read(self, *, initialize=False):
         response = self.session.get(f"{self.url}/values/{quote(TAB + '!A:F', safe='')}", timeout=TIMEOUT)
+        if initialize and response.status_code == 400:
+            self.initialize_empty_workbook()
+            return True, {}
         rows = checked_json(response, "Read Spotify Playlists tab").get("values", [])
+        if initialize and not rows:
+            self.initialize_empty_workbook()
+            return True, {}
         if rows and rows[0] != HEADERS:
             raise RuntimeError("Spotify Playlists headers do not match the expected columns")
         by_id = {}
@@ -117,7 +266,9 @@ class PlaylistSheet:
             )
             checked_json(response, "Update Spotify Playlists tab")
 
-    def insert_at_top_and_center_status(self, rows):
+    def insert_at_top(self, rows):
+        if not rows:
+            return
         response = self.session.get(
             self.url,
             params={"ranges": TAB, "fields": "sheets(properties(sheetId))"},
@@ -125,13 +276,27 @@ class PlaylistSheet:
         )
         sheet = checked_json(response, "Find Spotify Playlists tab")["sheets"][0]["properties"]
         sheet_id = sheet["sheetId"]
-        updates = []
-        if rows:
-            new_rows = {
-                "sheetId": sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": 1 + len(rows)
-            }
-            updates.extend([
-                {"insertDimension": {"range": new_rows, "inheritFromBefore": False}},
+        end_row = 1 + len(rows)
+        columns = {"sheetId": sheet_id, "startColumnIndex": 0, "endColumnIndex": len(HEADERS)}
+        # After insertion, the former first body row sits just below the new block.
+        source = {**columns, "startRowIndex": end_row, "endRowIndex": end_row + 1}
+        destination = {**columns, "startRowIndex": 1, "endRowIndex": end_row}
+        response = self.session.post(
+            f"{self.url}:batchUpdate",
+            json={"requests": [
+                {"insertDimension": {
+                    "range": {
+                        "sheetId": sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": end_row,
+                    },
+                    "inheritFromBefore": False,
+                }},
+                *({"copyPaste": {
+                    "source": source,
+                    "destination": destination,
+                    "pasteType": paste_type,
+                }} for paste_type in (
+                    "PASTE_FORMAT", "PASTE_DATA_VALIDATION", "PASTE_CONDITIONAL_FORMATTING",
+                )),
                 {"updateCells": {
                     "start": {"sheetId": sheet_id, "rowIndex": 1, "columnIndex": 0},
                     "rows": [
@@ -140,35 +305,10 @@ class PlaylistSheet:
                     ],
                     "fields": "userEnteredValue",
                 }},
-                {"repeatCell": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": 1,
-                        "endRowIndex": 1 + len(rows),
-                        "startColumnIndex": 0,
-                        "endColumnIndex": len(HEADERS),
-                    },
-                    "cell": {"userEnteredFormat": {"textFormat": {"bold": False}}},
-                    "fields": "userEnteredFormat.textFormat.bold",
-                }},
-            ])
-        status_column = HEADERS.index("Status")
-        updates.append({"repeatCell": {
-            "range": {
-                "sheetId": sheet_id,
-                "startRowIndex": 1,
-                "startColumnIndex": status_column,
-                "endColumnIndex": status_column + 1,
-            },
-            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
-            "fields": "userEnteredFormat.horizontalAlignment",
-        }})
-        response = self.session.post(
-            f"{self.url}:batchUpdate",
-            json={"requests": updates},
+            ]},
             timeout=TIMEOUT,
         )
-        checked_json(response, "Insert new Spotify playlists and center statuses")
+        checked_json(response, "Insert and format new Spotify playlists")
 
 
 def initial_status(title, visibility, get_events):
@@ -178,7 +318,7 @@ def initial_status(title, visibility, get_events):
         return PAUSED, ""
 
     try:
-        _, event_name = parse_title(title)
+        _, event_name, _ = parse_title(title)
     except ValueError:
         if re.match(r"^\d{1,4}\s*[./-]\s*\d|^\d{8}(?:\s|$)", title.strip()):
             return PAUSED, "Check date format or event name in playlist title"
@@ -195,8 +335,8 @@ def initial_status(title, visibility, get_events):
 
 
 def refresh_inventory(sheet, playlists, get_auto_approval_events=None):
-    has_header, existing = sheet.read()
-    updates = [] if has_header else [{"range": f"{TAB}!A1:F1", "values": [HEADERS]}]
+    _, existing = sheet.read(initialize=True)
+    updates = []
     additions = []
     for playlist_id, metadata in playlists.items():
         if playlist_id in existing:
@@ -208,7 +348,7 @@ def refresh_inventory(sheet, playlists, get_auto_approval_events=None):
         status, reason = initial_status(title, visibility, get_auto_approval_events)
         additions.append([playlist_id, *metadata, status, reason])
     sheet.write(updates)
-    sheet.insert_at_top_and_center_status(additions)
+    sheet.insert_at_top(additions)
     logging.info("Refreshed %d owned Spotify playlists, including %d new rows", len(playlists), len(additions))
 
 
@@ -221,16 +361,19 @@ def event_index(session):
     return by_name
 
 
-def publish(session, api_key, event, played, playlist_url):
-    if event["type"] == "convention":
-        return ERROR, "Convention upload unavailable until SwingStation's date requirements are verified"
-    if event["type"] != "local event":
+def publish(session, api_key, event, played, playlist_url, start_time=None):
+    if event["type"] not in {"local event", "convention"}:
         return ERROR, "Unsupported SwingStation event type"
+    if event["type"] == "convention" and start_time is None:
+        return ERROR, "Add a start time to the playlist title, e.g. (23:00)"
+    payload = {"spotify_url": playlist_url, "event_id": event["id"], "date": played.isoformat()}
+    if start_time is not None:
+        payload["start_time"] = start_time
     try:
         response = session.post(
             f"{SWINGSTATION}/sets",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"spotify_url": playlist_url, "event_id": event["id"], "date": played.isoformat()},
+            json=payload,
             timeout=TIMEOUT,
         )
     except (requests.Timeout, requests.ConnectionError):
@@ -241,13 +384,16 @@ def publish(session, api_key, event, played, playlist_url):
         logging.warning("SwingStation upload deferred (HTTP %s)", response.status_code)
         return None
     try:
-        code = response.json().get("error", {}).get("code", "")
+        error = response.json().get("error", {})
     except ValueError:
-        code = ""
+        error = {}
+    code = error.get("code", "")
     if response.status_code == 409 and code == "already_uploaded":
         return DONE, ""
     if code == "event_not_found":
         return ERROR, EVENT_MISSING + event["name"]
+    if code == "missing_field" and "start_time is required" in error.get("message", ""):
+        return ERROR, "SwingStation requires a start time for convention socials"
     if code and re.fullmatch(r"[a-z0-9_]+", code):
         return ERROR, f"SwingStation upload failed: {code} (HTTP {response.status_code})"
     return ERROR, f"SwingStation upload failed (HTTP {response.status_code})"
@@ -266,7 +412,7 @@ def process_queue(sheet, session, api_key, playlists, get_events):
             outcome = ERROR, "Make the playlist public before publishing"
         else:
             try:
-                played, event_name = parse_title(metadata[0])
+                played, event_name, start_time = parse_title(metadata[0])
             except ValueError as exc:
                 outcome = ERROR, str(exc)
             else:
@@ -276,7 +422,7 @@ def process_queue(sheet, session, api_key, playlists, get_events):
                 elif len(matches) > 1:
                     outcome = ERROR, f"Multiple SwingStation events match: {event_name}"
                 else:
-                    outcome = publish(session, api_key, matches[0], played, metadata[1])
+                    outcome = publish(session, api_key, matches[0], played, metadata[1], start_time)
                     if outcome is None:
                         return
         if list(outcome) != row[4:6]:

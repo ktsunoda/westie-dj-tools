@@ -2,10 +2,20 @@
 
 Run this standalone job daily. It refreshes owned Spotify playlists in the
 **Spotify Playlists** tab of the **SwingStation Sync** workbook, then processes
-approved public playlists. The tab can start empty. The job adds its header row
-and uses the Spotify playlist ID to update metadata while preserving approval
-and ignore decisions. Newly discovered playlists are inserted directly below
-the header.
+approved public playlists. The job uses the Spotify playlist ID to update
+metadata while preserving approval and ignore decisions. Newly discovered playlists are inserted directly below
+the header. New rows copy cell formatting, dropdown validation, and conditional
+formatting from the row immediately below them. Playlist values are generated
+for each new row.
+
+To set up a new workbook, share a Google spreadsheet with exactly one empty tab
+with the service account as Editor. On the first run, the job renames the
+workbook and its first tab, sets up the headers, column widths and Status
+dropdown, and adds three live views. **Needs Action** shows ⏸️ and ❌,
+**Pending** shows ▶️, and **On SwingStation** shows ✅. Edit statuses in
+**Spotify Playlists**, or open its saved **Needs Action** filter view from
+**Data → Change view** to edit only ⏸️ and ❌ rows. The main tab opens
+unfiltered. Setup only runs on a workbook with one empty tab.
 
 | Status | Meaning |
 | --- | --- |
@@ -20,10 +30,10 @@ Approved titles start with a date in `YYYY.MM.DD`, `YYYY-MM-DD`, or
 and repeated spaces and requires a unique result. The job keeps approved rows
 eligible after temporary upload failures.
 
-Local socials publish with the full date. Convention socials require
-verification of the month/year submission against the SwingStation API before
-the job can publish them. Until then, the job marks convention rows ❌ and
-explains why.
+For a convention social, add the local 24-hour start time in trailing
+parentheses, for example `2026.11.07 Sea to Sky (6:00)`. The job sends the full
+set date and normalizes the time to `06:00`. A missing or invalid time on an
+approved convention needs action. Local socials can omit the time.
 
 ## Auto-approval
 
