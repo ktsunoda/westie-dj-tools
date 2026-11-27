@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import sync
 
@@ -20,25 +20,54 @@ class SyncTests(unittest.TestCase):
             True,
             {"old": (2, ["old", "Before", "url", "Public", sync.IGNORED, "My choice"])},
         )
+        events = Mock(return_value={"local social": [{"type": "local event"}]})
         sync.refresh_inventory(
             sheet,
             {
                 "old": ["After", "url", "Public"],
-                "public": ["Unparsed title", "url", "Public"],
+                "public": ["2026.11.01 Local Social", "url", "Public"],
                 "private": ["Private", "url", "Private"],
             },
-            auto_approve=True,
+            get_auto_approval_events=events,
         )
         sheet.write.assert_called_once_with(
             [{"range": "'Spotify Playlists'!B2:D2", "values": [["After", "url", "Public"]]}]
         )
         sheet.insert_at_top_and_center_status.assert_called_once_with(
             [
-                ["public", "Unparsed title", "url", "Public", sync.APPROVED, ""],
+                ["public", "2026.11.01 Local Social", "url", "Public", sync.APPROVED, ""],
                 ["private", "Private", "url", "Private", sync.IGNORED, "Private playlist"],
             ]
         )
         self.assertEqual([item[0] for item in sheet.method_calls], ["read", "write", "insert_at_top_and_center_status"])
+
+    def test_auto_approval_requires_a_full_date_and_unique_local_event(self):
+        events = {
+            "local social": [{"type": "local event"}],
+            "convention": [{"type": "convention"}],
+            "ambiguous": [{"type": "local event"}, {"type": "local event"}],
+        }
+        cases = [
+            ("Road Trip", sync.IGNORED, "No set date"),
+            ("2026.02.30 Local Social", sync.PAUSED, "Check date"),
+            ("06/07/2026 Local Social", sync.PAUSED, "Check date"),
+            ("2026-11-01 Local Social Practice", sync.PAUSED, "Event not found"),
+            ("2026-11-01 Ambiguous", sync.PAUSED, "Multiple"),
+            ("2026-11-01 Convention", sync.PAUSED, "Event type is not eligible"),
+            ("2026-11-01 LOCAL  Social", sync.APPROVED, ""),
+        ]
+        for title, expected_status, expected_reason in cases:
+            with self.subTest(title=title):
+                status, reason = sync.initial_status(title, "Public", lambda: events)
+                self.assertEqual(status, expected_status)
+                self.assertTrue(reason.startswith(expected_reason))
+        self.assertEqual(sync.initial_status("Road Trip", "Public", None), (sync.PAUSED, ""))
+        lookup = Mock()
+        self.assertEqual(
+            sync.initial_status("2026-11-01 Local Social", "Private", lookup),
+            (sync.IGNORED, "Private playlist"),
+        )
+        lookup.assert_not_called()
 
     def test_new_playlists_are_inserted_below_header_in_one_batch(self):
         session = Mock()
@@ -84,8 +113,7 @@ class SyncTests(unittest.TestCase):
         row = ["id", "2026.11.01 Event", "url", "Public", sync.APPROVED, ""]
         sheet.read.return_value = True, {"id": (2, row)}
         playlists = {"id": row[1:4]}
-        with patch.object(sync, "event_index", return_value={}):
-            sync.process_queue(sheet, session, "key", playlists)
+        sync.process_queue(sheet, session, "key", playlists, lambda: {})
         missing = [sync.ERROR, sync.EVENT_MISSING + "Event"]
         sheet.write.assert_called_once_with(
             [{"range": "'Spotify Playlists'!E2:F2", "values": [missing]}]
@@ -95,8 +123,7 @@ class SyncTests(unittest.TestCase):
         event = {"id": "event-id", "type": "local event", "name": "Event"}
         session.post.return_value.status_code = 409
         session.post.return_value.json.return_value = {"error": {"code": "already_uploaded"}}
-        with patch.object(sync, "event_index", return_value={"event": [event]}):
-            sync.process_queue(sheet, session, "key", playlists)
+        sync.process_queue(sheet, session, "key", playlists, lambda: {"event": [event]})
         self.assertEqual(
             session.post.call_args.kwargs["json"],
             {"spotify_url": "url", "event_id": "event-id", "date": "2026-11-01"},
@@ -110,7 +137,11 @@ class SyncTests(unittest.TestCase):
         paused = ["paused", "bad title", "url", "Public", sync.PAUSED, ""]
         approved = ["approved", "bad title", "url", "Public", sync.APPROVED, ""]
         sheet.read.return_value = True, {"paused": (2, paused), "approved": (3, approved)}
-        sync.process_queue(sheet, session, "key", {"paused": paused[1:4], "approved": approved[1:4]})
+        events = Mock()
+        sync.process_queue(
+            sheet, session, "key", {"paused": paused[1:4], "approved": approved[1:4]}, events
+        )
+        events.assert_not_called()
         update = sheet.write.call_args.args[0][0]
         self.assertEqual(update["range"], "'Spotify Playlists'!E3:F3")
         self.assertEqual(update["values"][0][0], sync.ERROR)
