@@ -4,7 +4,8 @@ Run this standalone job daily. It refreshes owned Spotify playlists in the
 **Spotify Playlists** tab of the **SwingStation Sync** workbook, then processes
 approved public playlists. The tab can start empty. The job adds its header row
 and uses the Spotify playlist ID to update metadata while preserving approval
-and ignore decisions.
+and ignore decisions. Newly discovered playlists are inserted directly below
+the header.
 
 | Status | Meaning |
 | --- | --- |
