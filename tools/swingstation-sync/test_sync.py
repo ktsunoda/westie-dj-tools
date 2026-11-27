@@ -9,7 +9,7 @@ class SyncTests(unittest.TestCase):
     def test_title_formats_and_invalid_dates(self):
         for title in ("2026.06.16 Event", "2026-06-16 Event", "16.06.2026 Event"):
             with self.subTest(title=title):
-                self.assertEqual(sync.parse_title(title), (date(2026, 6, 16), "Event"))
+                self.assertEqual(sync.parse_title(title), (date(2026, 6, 16), "Event", None))
         for title in ("2026.02.30 Event", "2026-06-16", "2026-06-16 - 2026-06-17 Event"):
             with self.subTest(title=title), self.assertRaises(ValueError):
                 sync.parse_title(title)
@@ -128,25 +128,39 @@ class SyncTests(unittest.TestCase):
             [{"range": "'Spotify Playlists'!E2:F2", "values": [[sync.DONE, ""]]}]
         )
 
-    def test_convention_uses_full_date_without_start_time(self):
-        session = Mock()
-        event = {"id": "convention-id", "type": "convention", "name": "Convention"}
-        response = session.post.return_value
-        response.status_code = 201
-
-        self.assertEqual(sync.publish(session, "key", event, date(2026, 3, 21), "url"), (sync.DONE, ""))
-        self.assertEqual(
-            session.post.call_args.kwargs["json"],
-            {"spotify_url": "url", "event_id": "convention-id", "date": "2026-03-21"},
+    def test_timed_convention_title_publishes_with_normalized_start_time(self):
+        sheet, session = Mock(), Mock()
+        row = ["id", "2026.03.21 King Swing 2026 (6:00)", "url", "Public", sync.APPROVED, ""]
+        sheet.read.return_value = True, {"id": (2, row)}
+        event = {"id": "convention-id", "type": "convention", "name": "King Swing 2026"}
+        session.post.return_value.status_code = 201
+        sync.process_queue(
+            sheet, session, "key", {"id": row[1:4]}, lambda: {"king swing 2026": [event]}
+        )
+        self.assertEqual(session.post.call_args.kwargs["json"], {
+            "spotify_url": "url", "event_id": "convention-id", "date": "2026-03-21",
+            "start_time": "06:00",
+        })
+        sheet.write.assert_called_once_with(
+            [{"range": "'Spotify Playlists'!E2:F2", "values": [[sync.DONE, ""]]}]
         )
 
-        response.status_code = 400
-        response.json.return_value = {
-            "error": {"code": "missing_field", "message": "start_time is required for a convention social set"}
-        }
+    def test_convention_without_time_needs_action_without_posting(self):
+        session = Mock()
+        event = {"id": "convention-id", "type": "convention"}
         self.assertEqual(
             sync.publish(session, "key", event, date(2026, 3, 21), "url"),
-            (sync.ERROR, "SwingStation requires a start time for convention socials"),
+            (sync.ERROR, "Add a start time to the playlist title, e.g. (23:00)"),
+        )
+        session.post.assert_not_called()
+
+    def test_title_rejects_invalid_times_and_preserves_event_parentheses(self):
+        for title in ("2026.11.01 Event (24:00)", "2026.11.01 Event (6:3)", "2026.11.01 (06:00)"):
+            with self.subTest(title=title), self.assertRaises(ValueError):
+                sync.parse_title(title)
+        self.assertEqual(
+            sync.parse_title("2026.11.01 Event (Downtown)"),
+            (date(2026, 11, 1), "Event (Downtown)", None),
         )
 
     def test_only_approved_bad_title_gets_an_error(self):

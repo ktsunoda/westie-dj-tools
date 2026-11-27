@@ -43,7 +43,20 @@ def parse_title(title):
         )
     except ValueError as exc:
         raise ValueError("Invalid calendar date in playlist title") from exc
-    return played, event
+    start_time = None
+    suffix = re.search(r"\s+\((\d+:[^()]*)\)$", event)
+    if suffix:
+        time_match = re.fullmatch(r"(\d{1,2}):(\d{2})", suffix[1])
+        if not time_match:
+            raise ValueError("Use a 24-hour start time like (23:00)")
+        hour, minute = map(int, time_match.groups())
+        if hour > 23 or minute > 59:
+            raise ValueError("Use a valid 24-hour start time like (23:00)")
+        event = event[:suffix.start()]
+        start_time = f"{hour:02d}:{minute:02d}"
+    elif re.fullmatch(r"\(\d+:[^()]*\)", event):
+        raise ValueError("Add an event name before the start time")
+    return played, event, start_time
 
 
 def normalize_name(name):
@@ -169,7 +182,7 @@ def initial_status(title, visibility, get_events):
         return PAUSED, ""
 
     try:
-        _, event_name = parse_title(title)
+        _, event_name, _ = parse_title(title)
     except ValueError:
         if re.match(r"^\d{1,4}\s*[./-]\s*\d|^\d{8}(?:\s|$)", title.strip()):
             return PAUSED, "Check date format or event name in playlist title"
@@ -212,14 +225,19 @@ def event_index(session):
     return by_name
 
 
-def publish(session, api_key, event, played, playlist_url):
+def publish(session, api_key, event, played, playlist_url, start_time=None):
     if event["type"] not in {"local event", "convention"}:
         return ERROR, "Unsupported SwingStation event type"
+    if event["type"] == "convention" and start_time is None:
+        return ERROR, "Add a start time to the playlist title, e.g. (23:00)"
+    payload = {"spotify_url": playlist_url, "event_id": event["id"], "date": played.isoformat()}
+    if start_time is not None:
+        payload["start_time"] = start_time
     try:
         response = session.post(
             f"{SWINGSTATION}/sets",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"spotify_url": playlist_url, "event_id": event["id"], "date": played.isoformat()},
+            json=payload,
             timeout=TIMEOUT,
         )
     except (requests.Timeout, requests.ConnectionError):
@@ -258,7 +276,7 @@ def process_queue(sheet, session, api_key, playlists, get_events):
             outcome = ERROR, "Make the playlist public before publishing"
         else:
             try:
-                played, event_name = parse_title(metadata[0])
+                played, event_name, start_time = parse_title(metadata[0])
             except ValueError as exc:
                 outcome = ERROR, str(exc)
             else:
@@ -268,7 +286,7 @@ def process_queue(sheet, session, api_key, playlists, get_events):
                 elif len(matches) > 1:
                     outcome = ERROR, f"Multiple SwingStation events match: {event_name}"
                 else:
-                    outcome = publish(session, api_key, matches[0], played, metadata[1])
+                    outcome = publish(session, api_key, matches[0], played, metadata[1], start_time)
                     if outcome is None:
                         return
         if list(outcome) != row[4:6]:

@@ -22,9 +22,10 @@ Approved titles start with a date in `YYYY.MM.DD`, `YYYY-MM-DD`, or
 and repeated spaces and requires a unique result. The job keeps approved rows
 eligible after temporary upload failures.
 
-Approved local and convention socials send the full playlist date. The job
-omits the start time. If SwingStation requires a start time for a convention,
-the job marks the row ❌ with that reason.
+For a convention social, add the local 24-hour start time in trailing
+parentheses, for example `2026.11.07 Sea to Sky (6:00)`. The job sends the full
+set date and normalizes the time to `06:00`. A missing or invalid time on an
+approved convention needs action. Local socials can omit the time.
 
 ## Auto-approval
 
