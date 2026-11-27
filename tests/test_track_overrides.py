@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import Mock
 
 from spotify_search import TrackOverrides
@@ -26,6 +27,39 @@ def sheet(*rows, headers=HEADERS):
 
 
 class TrackOverridesTests(unittest.TestCase):
+    def test_last_accessed_on_insert_and_use_with_reordered_columns(self):
+        headers = ["Title", "Last Accessed", "Spotify Track URL", "Artist"]
+        session = Mock()
+        session.get.side_effect = [
+            sheet([TITLE, "", URL, ARTIST], headers=headers),
+            sheet(["Moved", "", "", ARTIST], [TITLE, "", URL, ARTIST], headers=headers),
+            sheet(["Moved", "", "", ARTIST], headers=headers),
+        ]
+        session.post.return_value = response()
+        today = datetime.now(timezone.utc).date().isoformat()
+        workbook = TrackOverrides(session, "workbook")
+
+        self.assertEqual(workbook.resolve_miss(ARTIST, TITLE), f"spotify:track:{TRACK_ID}")
+        self.assertEqual(workbook.resolve_miss(ARTIST, TITLE), f"spotify:track:{TRACK_ID}")
+        session.post.assert_called_once()
+        update, = session.post.call_args.kwargs["json"]["requests"]
+        self.assertEqual(update["updateCells"]["start"], {
+            "sheetId": 0, "rowIndex": 2, "columnIndex": 1,
+        })
+        self.assertEqual(update["updateCells"]["rows"], [
+            {"values": [{"userEnteredValue": {"stringValue": today}}]},
+        ])
+
+        self.assertIsNone(workbook.resolve_miss(ARTIST, "Moved"))
+        self.assertIsNone(workbook.resolve_miss(ARTIST, "New"))
+        self.assertEqual(session.post.call_count, 3)
+        update, = session.post.call_args_list[1].kwargs["json"]["requests"]
+        self.assertEqual(update["updateCells"]["start"]["rowIndex"], 1)
+        added = session.post.call_args.kwargs["json"]["requests"]
+        dated, = [req["updateCells"] for req in added if "updateCells" in req
+                  and req["updateCells"]["start"]["columnIndex"] == 1]
+        self.assertEqual(dated["rows"], [{"values": [{"userEnteredValue": {"stringValue": today}}]}])
+
     def test_exact_override_and_existing_blank_pair_on_reordered_columns(self):
         session = Mock()
         session.get.return_value = sheet(
