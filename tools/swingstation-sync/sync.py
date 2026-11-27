@@ -376,12 +376,14 @@ def publish(session, api_key, event, played, playlist_url, start_time=None):
             json=payload,
             timeout=TIMEOUT,
         )
-    except (requests.Timeout, requests.ConnectionError):
+    except (requests.Timeout, requests.ConnectionError) as exc:
+        logging.warning("SwingStation upload deferred for %s (%s)", playlist_url, type(exc).__name__)
         return None
     if response.status_code == 201:
+        logging.info("SwingStation published a new set for %s", playlist_url)
         return DONE, ""
     if response.status_code == 429 or response.status_code >= 500:
-        logging.warning("SwingStation upload deferred (HTTP %s)", response.status_code)
+        logging.warning("SwingStation upload deferred for %s (HTTP %s)", playlist_url, response.status_code)
         return None
     try:
         error = response.json().get("error", {})
@@ -389,6 +391,7 @@ def publish(session, api_key, event, played, playlist_url, start_time=None):
         error = {}
     code = error.get("code", "")
     if response.status_code == 409 and code == "already_uploaded":
+        logging.info("SwingStation reported already_uploaded for %s", playlist_url)
         return DONE, ""
     if code == "event_not_found":
         return ERROR, EVENT_MISSING + event["name"]
@@ -424,9 +427,16 @@ def process_queue(sheet, session, api_key, playlists, get_events):
                 else:
                     outcome = publish(session, api_key, matches[0], played, metadata[1], start_time)
                     if outcome is None:
+                        logging.warning("Deferred playlist %r (Spotify ID %s)", metadata[0], playlist_id)
                         return
+        title = metadata[0] if metadata is not None else row[1]
+        new_status, new_reason = outcome
+        if new_status == ERROR:
+            logging.info("Playlist %r (Spotify ID %s) needs action: %s", title, playlist_id, new_reason)
         if list(outcome) != row[4:6]:
             sheet.write([{"range": f"{TAB}!E{number}:F{number}", "values": [list(outcome)]}])
+            if new_status == DONE:
+                logging.info("Marked playlist %r (Spotify ID %s) done", title, playlist_id)
 
 
 def main():

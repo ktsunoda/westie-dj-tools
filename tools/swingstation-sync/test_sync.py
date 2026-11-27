@@ -187,7 +187,9 @@ class SyncTests(unittest.TestCase):
         event = {"id": "event-id", "type": "local event", "name": "Event"}
         session.post.return_value.status_code = 409
         session.post.return_value.json.return_value = {"error": {"code": "already_uploaded"}}
-        sync.process_queue(sheet, session, "key", playlists, lambda: {"event": [event]})
+        with self.assertLogs(level="INFO") as logs:
+            sync.process_queue(sheet, session, "key", playlists, lambda: {"event": [event]})
+        self.assertIn("SwingStation reported already_uploaded for url", "\n".join(logs.output))
         self.assertEqual(
             session.post.call_args.kwargs["json"],
             {"spotify_url": "url", "event_id": "event-id", "date": "2026-11-01"},
@@ -202,9 +204,11 @@ class SyncTests(unittest.TestCase):
         sheet.read.return_value = True, {"id": (2, row)}
         event = {"id": "convention-id", "type": "convention", "name": "King Swing 2026"}
         session.post.return_value.status_code = 201
-        sync.process_queue(
-            sheet, session, "key", {"id": row[1:4]}, lambda: {"king swing 2026": [event]}
-        )
+        with self.assertLogs(level="INFO") as logs:
+            sync.process_queue(
+                sheet, session, "key", {"id": row[1:4]}, lambda: {"king swing 2026": [event]}
+            )
+        self.assertIn("SwingStation published a new set for url", "\n".join(logs.output))
         self.assertEqual(session.post.call_args.kwargs["json"], {
             "spotify_url": "url", "event_id": "convention-id", "date": "2026-03-21",
             "start_time": "06:00",
