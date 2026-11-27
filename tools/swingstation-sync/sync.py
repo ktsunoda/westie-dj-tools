@@ -139,6 +139,17 @@ class PlaylistSheet:
                     ],
                     "fields": "userEnteredValue",
                 }},
+                {"repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1,
+                        "endRowIndex": 1 + len(rows),
+                        "startColumnIndex": 0,
+                        "endColumnIndex": len(HEADERS),
+                    },
+                    "cell": {"userEnteredFormat": {"textFormat": {"bold": False}}},
+                    "fields": "userEnteredFormat.textFormat.bold",
+                }},
             ])
         status_column = HEADERS.index("Status")
         updates.append({"repeatCell": {
