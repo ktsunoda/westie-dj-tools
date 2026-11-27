@@ -51,7 +51,18 @@ class SyncTests(unittest.TestCase):
         sheet.insert_at_top_and_center_status([["one", "=literal"], ["two", "Second"]])
 
         self.assertTrue(session.post.call_args.args[0].endswith("/workbook:batchUpdate"))
-        insert, write, align = session.post.call_args.kwargs["json"]["requests"]
+        insert, write, unbold, align = session.post.call_args.kwargs["json"]["requests"]
+        self.assertEqual(unbold["repeatCell"], {
+            "range": {
+                "sheetId": 42,
+                "startRowIndex": 1,
+                "endRowIndex": 3,
+                "startColumnIndex": 0,
+                "endColumnIndex": len(sync.HEADERS),
+            },
+            "cell": {"userEnteredFormat": {"textFormat": {"bold": False}}},
+            "fields": "userEnteredFormat.textFormat.bold",
+        })
         self.assertEqual(alignment_only, [align])
         self.assertEqual(align["repeatCell"], {
             "range": {"sheetId": 42, "startRowIndex": 1, "startColumnIndex": 4, "endColumnIndex": 5},
