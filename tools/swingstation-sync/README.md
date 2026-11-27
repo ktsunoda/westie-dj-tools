@@ -25,6 +25,16 @@ verification of the month/year submission against the SwingStation API before
 the job can publish them. Until then, the job marks convention rows ❌ and
 explains why.
 
+## Auto-approval
+
+With auto-approval enabled, a new public playlist starts at ▶️ only when
+its title has a valid set date and its full event name uniquely matches a
+SwingStation local event. A title with no date prefix starts at 🚫. Date
+formats needing review, missing or ambiguous events, and convention matches
+start at ⏸️ with a reason. Existing statuses are preserved.
+
+Inventory-only mode uses manual approval defaults and skips event lookup.
+
 ## Configuration
 
 | Environment variable | Value |
@@ -34,7 +44,7 @@ explains why.
 | `SPOTIFY_CLIENT_ID` | SwingStation Sync Spotify app client ID. |
 | `SPOTIFY_REFRESH_TOKEN` | Refresh token obtained using Spotify Authorization Code with PKCE and the `playlist-read-private` scope. |
 | `SWINGSTATION_API_KEY` | Publishing key from your SwingStation profile. |
-| `AUTO_APPROVE` | Defaults to `false`. Set to `true` to start newly discovered public playlists at ▶️. This also applies to the initial inventory if the tab is empty. |
+| `AUTO_APPROVE` | Defaults to `false`. Set to `true` to classify newly discovered public playlists, including the initial inventory if the tab is empty. |
 
 Install with `python -m pip install -r tools/swingstation-sync/requirements.txt`.
 Set the environment variables and run

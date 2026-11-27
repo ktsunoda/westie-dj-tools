@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from datetime import date
+from functools import lru_cache
 from urllib.parse import quote
 
 import google.auth
@@ -170,7 +171,30 @@ class PlaylistSheet:
         checked_json(response, "Insert new Spotify playlists and center statuses")
 
 
-def refresh_inventory(sheet, playlists, auto_approve):
+def initial_status(title, visibility, get_events):
+    if visibility == "Private":
+        return IGNORED, "Private playlist"
+    if visibility != "Public" or get_events is None:
+        return PAUSED, ""
+
+    try:
+        _, event_name = parse_title(title)
+    except ValueError:
+        if re.match(r"^\d{1,4}\s*[./-]\s*\d|^\d{8}(?:\s|$)", title.strip()):
+            return PAUSED, "Check date format or event name in playlist title"
+        return IGNORED, "No set date in title"
+
+    matches = get_events().get(normalize_name(event_name), [])
+    if not matches:
+        return PAUSED, EVENT_MISSING + event_name
+    if len(matches) > 1:
+        return PAUSED, f"Multiple SwingStation events match: {event_name}"
+    if matches[0]["type"] != "local event":
+        return PAUSED, "Event type is not eligible for auto-approval"
+    return APPROVED, ""
+
+
+def refresh_inventory(sheet, playlists, get_auto_approval_events=None):
     has_header, existing = sheet.read()
     updates = [] if has_header else [{"range": f"{TAB}!A1:F1", "values": [HEADERS]}]
     additions = []
@@ -180,12 +204,8 @@ def refresh_inventory(sheet, playlists, auto_approve):
             if row[1:4] != metadata:
                 updates.append({"range": f"{TAB}!B{number}:D{number}", "values": [metadata]})
             continue
-        visibility = metadata[2]
-        if visibility == "Private":
-            status, reason = IGNORED, "Private playlist"
-        else:
-            status = APPROVED if auto_approve and visibility == "Public" else PAUSED
-            reason = ""
+        title, _, visibility = metadata
+        status, reason = initial_status(title, visibility, get_auto_approval_events)
         additions.append([playlist_id, *metadata, status, reason])
     sheet.write(updates)
     sheet.insert_at_top_and_center_status(additions)
@@ -233,9 +253,8 @@ def publish(session, api_key, event, played, playlist_url):
     return ERROR, f"SwingStation upload failed (HTTP {response.status_code})"
 
 
-def process_queue(sheet, session, api_key, playlists):
+def process_queue(sheet, session, api_key, playlists, get_events):
     _, rows = sheet.read()
-    events = None
     for playlist_id, (number, row) in rows.items():
         status, reason = row[4:6]
         if status != APPROVED and not (status == ERROR and reason.startswith(EVENT_MISSING)):
@@ -251,9 +270,7 @@ def process_queue(sheet, session, api_key, playlists):
             except ValueError as exc:
                 outcome = ERROR, str(exc)
             else:
-                if events is None:
-                    events = event_index(session)
-                matches = events.get(normalize_name(event_name), [])
+                matches = get_events().get(normalize_name(event_name), [])
                 if not matches:
                     outcome = ERROR, EVENT_MISSING + event_name
                 elif len(matches) > 1:
@@ -283,9 +300,15 @@ def main():
         with AuthorizedSession(credentials) as google_session, requests.Session() as session:
             sheet = PlaylistSheet(google_session, spreadsheet)
             playlists = list_owned_playlists(session, client_id, refresh_token)
-            refresh_inventory(sheet, playlists, mode == "true")
+
+            @lru_cache(maxsize=1)
+            def get_events():
+                return event_index(session)
+
+            auto_approve = mode == "true" and not args.inventory_only
+            refresh_inventory(sheet, playlists, get_events if auto_approve else None)
             if not args.inventory_only:
-                process_queue(sheet, session, api_key, playlists)
+                process_queue(sheet, session, api_key, playlists, get_events)
     except KeyError as exc:
         raise SystemExit(f"Missing required configuration or response field: {exc}") from None
     except RuntimeError as exc:
