@@ -117,7 +117,9 @@ class PlaylistSheet:
             )
             checked_json(response, "Update Spotify Playlists tab")
 
-    def insert_at_top_and_center_status(self, rows):
+    def insert_at_top(self, rows):
+        if not rows:
+            return
         response = self.session.get(
             self.url,
             params={"ranges": TAB, "fields": "sheets(properties(sheetId))"},
@@ -125,13 +127,27 @@ class PlaylistSheet:
         )
         sheet = checked_json(response, "Find Spotify Playlists tab")["sheets"][0]["properties"]
         sheet_id = sheet["sheetId"]
-        updates = []
-        if rows:
-            new_rows = {
-                "sheetId": sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": 1 + len(rows)
-            }
-            updates.extend([
-                {"insertDimension": {"range": new_rows, "inheritFromBefore": False}},
+        end_row = 1 + len(rows)
+        columns = {"sheetId": sheet_id, "startColumnIndex": 0, "endColumnIndex": len(HEADERS)}
+        # After insertion, the former first body row sits just below the new block.
+        source = {**columns, "startRowIndex": end_row, "endRowIndex": end_row + 1}
+        destination = {**columns, "startRowIndex": 1, "endRowIndex": end_row}
+        response = self.session.post(
+            f"{self.url}:batchUpdate",
+            json={"requests": [
+                {"insertDimension": {
+                    "range": {
+                        "sheetId": sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": end_row,
+                    },
+                    "inheritFromBefore": False,
+                }},
+                *({"copyPaste": {
+                    "source": source,
+                    "destination": destination,
+                    "pasteType": paste_type,
+                }} for paste_type in (
+                    "PASTE_FORMAT", "PASTE_DATA_VALIDATION", "PASTE_CONDITIONAL_FORMATTING",
+                )),
                 {"updateCells": {
                     "start": {"sheetId": sheet_id, "rowIndex": 1, "columnIndex": 0},
                     "rows": [
@@ -140,35 +156,10 @@ class PlaylistSheet:
                     ],
                     "fields": "userEnteredValue",
                 }},
-                {"repeatCell": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": 1,
-                        "endRowIndex": 1 + len(rows),
-                        "startColumnIndex": 0,
-                        "endColumnIndex": len(HEADERS),
-                    },
-                    "cell": {"userEnteredFormat": {"textFormat": {"bold": False}}},
-                    "fields": "userEnteredFormat.textFormat.bold",
-                }},
-            ])
-        status_column = HEADERS.index("Status")
-        updates.append({"repeatCell": {
-            "range": {
-                "sheetId": sheet_id,
-                "startRowIndex": 1,
-                "startColumnIndex": status_column,
-                "endColumnIndex": status_column + 1,
-            },
-            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
-            "fields": "userEnteredFormat.horizontalAlignment",
-        }})
-        response = self.session.post(
-            f"{self.url}:batchUpdate",
-            json={"requests": updates},
+            ]},
             timeout=TIMEOUT,
         )
-        checked_json(response, "Insert new Spotify playlists and center statuses")
+        checked_json(response, "Insert and format new Spotify playlists")
 
 
 def initial_status(title, visibility, get_events):
@@ -208,7 +199,7 @@ def refresh_inventory(sheet, playlists, get_auto_approval_events=None):
         status, reason = initial_status(title, visibility, get_auto_approval_events)
         additions.append([playlist_id, *metadata, status, reason])
     sheet.write(updates)
-    sheet.insert_at_top_and_center_status(additions)
+    sheet.insert_at_top(additions)
     logging.info("Refreshed %d owned Spotify playlists, including %d new rows", len(playlists), len(additions))
 
 
