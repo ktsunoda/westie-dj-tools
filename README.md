@@ -7,6 +7,7 @@ Python tools for West Coast Swing DJs to archive sets, share recent plays, and b
 | [DJ Set Processor](tools/dj-set-processor/README.md) | Reads tagged VirtualDJ `.m3u` exports from Google Drive. Use `DH` to archive plays in Google Sheets, `SP` to create a Spotify playlist for the event, or both. |
 | [Westie Radio](tools/westie-radio/README.md) | Adds new plays from daily VirtualDJ exports in Google Drive to one rolling Spotify playlist. It remembers where it left off in each file and caps the playlist at 200 entries. |
 | [Contest Playlist Builder](tools/contest-playlist-builder/README.md) | Reads competition entries from the DJ history workbook, rebuilds song lists for six WCS divisions in Google Sheets, and adds newly processed tracks to each division's Spotify playlist. |
+| [SwingStation Sync](tools/swingstation-sync/README.md) | Inventories owned Spotify playlists in Google Sheets and publishes approved local social sets to SwingStation. |
 
 The DJ Set Processor can populate the history workbook that the Contest Playlist Builder reads. Westie Radio runs independently for ongoing playback history.
 
