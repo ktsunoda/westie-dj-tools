@@ -9,15 +9,17 @@ class SpotifyMatchingTests(unittest.TestCase):
     def candidate(uri, title, *artists):
         return {"uri": uri, "name": title, "artists": [{"name": name} for name in artists]}
 
-    def test_album_parenthetical_preserves_distinct_recordings(self):
+    def test_album_parenthetical_ranks_matching_recordings(self):
         artist = "Eva Cassidy"
         items = []
-        for album, duration in (("Songbird", 242000), ("Simply Eva", 160000)):
+        for album, duration in (("Eva By Heart", 244093), ("Songbird", 242040),
+                                ("Best Of", 242146), ("Simply Eva", 160040)):
             track = self.candidate(album, f"Wade In The Water ({album})", artist)
             items.append(dict(track, album={"name": album}, duration_ms=duration))
         api = Mock(return_value={"tracks": {"items": items}})
 
-        self.assertIsNone(find_track(api, artist, "Wade In The Water", ""))
+        self.assertEqual(find_track(api, artist, "Wade In The Water", ""), "Eva By Heart")
+        self.assertEqual(find_track(api, artist, "Wade In The Water", "", duration_ms=120000), "Eva By Heart")
         self.assertEqual(find_track(api, artist, "Wade In The Water", "", duration_ms=242000), "Songbird")
         self.assertEqual(find_track(api, artist, "Wade In The Water", "", duration_ms=160000), "Simply Eva")
 
@@ -172,13 +174,13 @@ class SpotifyMatchingTests(unittest.TestCase):
 
         self.assertEqual(find_track(api, "Artist", "Song (Acoustic) [feat. Guest]", ""), "right")
 
-    def test_recovery_rejects_multiple_recordings_and_wrong_versions(self):
+    def test_recovery_prefers_search_order_and_rejects_wrong_versions(self):
         candidates = [
             self.candidate("first", "Missin' You", "Artist"),
             self.candidate("second", "Missin’ You", "Artist"),
         ]
         api = Mock(return_value={"tracks": {"items": candidates}})
-        self.assertIsNone(find_track(api, "Artist", "Missin You", ""))
+        self.assertEqual(find_track(api, "Artist", "Missin You", ""), "first")
         self.assertIsNone(find_track(api, "Artist", "Missin You (Acoustic)", ""))
 
     def test_recovery_requires_credits_on_artist_annotations(self):
@@ -322,7 +324,7 @@ class SpotifyMatchingTests(unittest.TestCase):
         self.assertEqual(find_track(api, "Ciara", "1, 2 Step", ""), "clean")
         self.assertEqual(find_track(api, "Ciara", "One, Two Step", ""), "clean")
         clean["duration_ms"] = 180000
-        self.assertIsNone(find_track(api, "Ciara", "One, Two Step", ""))
+        self.assertEqual(find_track(api, "Ciara", "One, Two Step", ""), "explicit")
         self.assertEqual(find_track(api, "Ciara", "1, 2 Step", ""), "explicit")
 
     def test_recovery_uses_catalog_explicit_flag_for_requested_version(self):
@@ -378,11 +380,12 @@ class SpotifyMatchingTests(unittest.TestCase):
         second["duration_ms"] = 325000
         api = Mock(return_value={"tracks": {"items": [first, second]}})
         args = (api, "Ruthie Foster", "Walk On (Album Version)", "")
-        self.assertIsNone(find_track(*args))
+        self.assertEqual(find_track(*args), "first")
         self.assertEqual(find_track(*args, duration_ms=277000), "first")
-        self.assertIsNone(find_track(*args, duration_ms=290000))
+        self.assertEqual(find_track(*args, duration_ms=310000), "first")
         second["duration_ms"] = 278000
-        self.assertIsNone(find_track(*args, duration_ms=277000))
+        self.assertEqual(find_track(*args, duration_ms=277000), "first")
+        self.assertEqual(find_track(api, "Ruthie Foster", "Walk On", "", duration_ms=278000), "second")
 
     def test_recovery_does_not_reject_a_unique_match_by_duration(self):
         track = self.candidate("original", "Don't Wanna Go Home", "Jason Derulo")

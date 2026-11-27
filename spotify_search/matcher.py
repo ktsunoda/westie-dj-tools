@@ -176,7 +176,7 @@ def is_clean_counterpart(clean, explicit):
             == [a.get("id") or artist_key(a["name"]) for a in explicit["artists"]])
 
 
-def choose_recording(matches, duration_ms=None):
+def choose_recording(matches, duration_ms=None, *, allow_ranked_match=False):
     if len(matches) == 1:
         return next(iter(matches.values()))["uri"]
     if len(matches) == 2:
@@ -189,10 +189,14 @@ def choose_recording(matches, duration_ms=None):
         for tolerance in (500, 2000):
             close = [track for track in matches.values() if track.get("duration_ms")
                      and abs(track["duration_ms"] - duration_ms) <= tolerance]
-            if len(close) == 1:
-                return close[0]["uri"]
             if close:
+                if allow_ranked_match:
+                    return min(close, key=lambda track: abs(track["duration_ms"] - duration_ms))["uri"]
+                if len(close) == 1:
+                    return close[0]["uri"]
                 break
+    if allow_ranked_match and matches:
+        return next(iter(matches.values()))["uri"]
     return None
 
 
@@ -236,7 +240,7 @@ def recover_parenthetical(search, artist, names, candidates, duration_ms):
         if (title_key(name) in subtitle_titles and track.get("duration_ms")
                 and abs(track["duration_ms"] - duration_ms) <= 2000):
             subtitle_matches.setdefault(key, track)
-    return choose_recording(album_matches or subtitle_matches, duration_ms)
+    return choose_recording(album_matches or subtitle_matches, duration_ms, allow_ranked_match=bool(album_matches))
 
 
 def recover_track(search, artist, names, candidates, duration_ms):
@@ -348,7 +352,7 @@ def recover_track(search, artist, names, candidates, duration_ms):
                 matches.setdefault(recording_key(track), track)
     matches = full_title_matches or shortened_title_matches or acoustic_matches or edit_matches
     if matches:
-        return choose_recording(matches, duration_ms)
+        return choose_recording(matches, duration_ms, allow_ranked_match=True)
     return recover_parenthetical(search, artist, names, candidates, duration_ms)
 
 
@@ -398,7 +402,7 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
             ]
         return search_results[query]
 
-    fallback = None
+    fallback = {}
     candidates = {}
     alias_matches = {}
     lead_matches = {}
@@ -407,6 +411,7 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
     lead_credit = normalized(lead)
     for index, query in enumerate(dict.fromkeys(queries)):
         items = search(query)
+        exact_matches = {}
         for item in items:
             candidates[item["uri"]] = item
             artists = {normalized(entry["name"]) for entry in item["artists"]}
@@ -414,20 +419,25 @@ def find_track(api, artist, title, remix, *, duration_ms=None):
             if not all(has_recovery_credit(guest, artist_keys) for guest in featured):
                 continue
             if normalized(item["name"]) in exact_titles and normalized(artist) in artists:
-                return prefer_clean(item, items)
+                exact_matches.setdefault(recording_key(item), item)
+                continue
             if title_key(item["name"]) not in title_keys:
                 continue
-            if fallback is None and credits_match(artist, artists):
-                fallback = item
             recording = recording_key(item)
+            if credits_match(artist, artists):
+                fallback.setdefault(recording, item)
             aliases = {alias.strip() for name in artists
                        for alias in re.findall(r"\(([^()]+)\)$", name)}
             if source_credit in aliases:
                 alias_matches.setdefault(recording, item)
             if allow_lead_match and lead_credit in artists:
                 lead_matches.setdefault(recording, item)
-        if fallback is not None and index >= exact_query_count - 1:
-            return prefer_clean(fallback, candidates.values())
+        if exact_matches:
+            uri = choose_recording(exact_matches, duration_ms, allow_ranked_match=True)
+            return prefer_clean(candidates[uri], items)
+        if fallback and index >= exact_query_count - 1:
+            uri = choose_recording(fallback, duration_ms, allow_ranked_match=True)
+            return prefer_clean(candidates[uri], candidates.values())
     if alias_matches or lead_matches:
         return choose_recording(alias_matches or lead_matches, duration_ms)
     return recover_track(search, artist, names, candidates, duration_ms)
