@@ -32,26 +32,32 @@ class SyncTests(unittest.TestCase):
         sheet.write.assert_called_once_with(
             [{"range": "'Spotify Playlists'!B2:D2", "values": [["After", "url", "Public"]]}]
         )
-        sheet.insert_at_top.assert_called_once_with(
+        sheet.insert_at_top_and_center_status.assert_called_once_with(
             [
                 ["public", "Unparsed title", "url", "Public", sync.APPROVED, ""],
                 ["private", "Private", "url", "Private", sync.IGNORED, "Private playlist"],
             ]
         )
-        self.assertEqual([item[0] for item in sheet.method_calls], ["read", "write", "insert_at_top"])
+        self.assertEqual([item[0] for item in sheet.method_calls], ["read", "write", "insert_at_top_and_center_status"])
 
     def test_new_playlists_are_inserted_below_header_in_one_batch(self):
         session = Mock()
         session.get.return_value.json.return_value = {"sheets": [{"properties": {"sheetId": 42}}]}
         sheet = sync.PlaylistSheet(session, "workbook")
-        sheet.insert_at_top([])
-        session.get.assert_not_called()
-        session.post.assert_not_called()
+        sheet.insert_at_top_and_center_status([])
+        alignment_only = session.post.call_args.kwargs["json"]["requests"]
+        self.assertEqual(len(alignment_only), 1)
 
-        sheet.insert_at_top([["one", "=literal"], ["two", "Second"]])
+        sheet.insert_at_top_and_center_status([["one", "=literal"], ["two", "Second"]])
 
         self.assertTrue(session.post.call_args.args[0].endswith("/workbook:batchUpdate"))
-        insert, write = session.post.call_args.kwargs["json"]["requests"]
+        insert, write, align = session.post.call_args.kwargs["json"]["requests"]
+        self.assertEqual(alignment_only, [align])
+        self.assertEqual(align["repeatCell"], {
+            "range": {"sheetId": 42, "startRowIndex": 1, "startColumnIndex": 4, "endColumnIndex": 5},
+            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+            "fields": "userEnteredFormat.horizontalAlignment",
+        })
         self.assertEqual(
             insert["insertDimension"]["range"],
             {"sheetId": 42, "dimension": "ROWS", "startIndex": 1, "endIndex": 3},

@@ -116,9 +116,7 @@ class PlaylistSheet:
             )
             checked_json(response, "Update Spotify Playlists tab")
 
-    def insert_at_top(self, rows):
-        if not rows:
-            return
+    def insert_at_top_and_center_status(self, rows):
         response = self.session.get(
             self.url,
             params={"ranges": TAB, "fields": "sheets(properties(sheetId))"},
@@ -126,10 +124,12 @@ class PlaylistSheet:
         )
         sheet = checked_json(response, "Find Spotify Playlists tab")["sheets"][0]["properties"]
         sheet_id = sheet["sheetId"]
-        new_rows = {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": 1 + len(rows)}
-        response = self.session.post(
-            f"{self.url}:batchUpdate",
-            json={"requests": [
+        updates = []
+        if rows:
+            new_rows = {
+                "sheetId": sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": 1 + len(rows)
+            }
+            updates.extend([
                 {"insertDimension": {"range": new_rows, "inheritFromBefore": False}},
                 {"updateCells": {
                     "start": {"sheetId": sheet_id, "rowIndex": 1, "columnIndex": 0},
@@ -139,10 +139,24 @@ class PlaylistSheet:
                     ],
                     "fields": "userEnteredValue",
                 }},
-            ]},
+            ])
+        status_column = HEADERS.index("Status")
+        updates.append({"repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": 1,
+                "startColumnIndex": status_column,
+                "endColumnIndex": status_column + 1,
+            },
+            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+            "fields": "userEnteredFormat.horizontalAlignment",
+        }})
+        response = self.session.post(
+            f"{self.url}:batchUpdate",
+            json={"requests": updates},
             timeout=TIMEOUT,
         )
-        checked_json(response, "Insert new Spotify playlists below the header")
+        checked_json(response, "Insert new Spotify playlists and center statuses")
 
 
 def refresh_inventory(sheet, playlists, auto_approve):
@@ -163,7 +177,7 @@ def refresh_inventory(sheet, playlists, auto_approve):
             reason = ""
         additions.append([playlist_id, *metadata, status, reason])
     sheet.write(updates)
-    sheet.insert_at_top(additions)
+    sheet.insert_at_top_and_center_status(additions)
     logging.info("Refreshed %d owned Spotify playlists, including %d new rows", len(playlists), len(additions))
 
 
