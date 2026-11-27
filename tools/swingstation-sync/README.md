@@ -2,12 +2,18 @@
 
 Run this standalone job daily. It refreshes owned Spotify playlists in the
 **Spotify Playlists** tab of the **SwingStation Sync** workbook, then processes
-approved public playlists. The tab can start empty. The job adds its header row
-and uses the Spotify playlist ID to update metadata while preserving approval
-and ignore decisions. Newly discovered playlists are inserted directly below
+approved public playlists. The job uses the Spotify playlist ID to update
+metadata while preserving approval and ignore decisions. Newly discovered playlists are inserted directly below
 the header. New rows copy cell formatting, dropdown validation, and conditional
 formatting from the row immediately below them. Playlist values are generated
 for each new row.
+
+To set up a new workbook, share a Google spreadsheet with exactly one empty tab
+with the service account as Editor. On the first run, the job renames the
+workbook and its first tab, sets up the headers, column widths and Status
+dropdown, and adds three live views. **Needs Action** shows ⏸️ and ❌,
+**Pending** shows ▶️, and **On SwingStation** shows ✅. Edit statuses in
+**Spotify Playlists**. The setup only runs on a workbook with one empty tab.
 
 | Status | Meaning |
 | --- | --- |

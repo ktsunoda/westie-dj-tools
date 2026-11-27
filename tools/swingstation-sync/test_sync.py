@@ -6,6 +6,61 @@ import sync
 
 
 class SyncTests(unittest.TestCase):
+    def test_blank_workbook_bootstraps_inventory_and_all_views(self):
+        session = Mock()
+        session.get.side_effect = [
+            Mock(status_code=400, ok=False),
+            Mock(ok=True, **{"json.return_value": {"sheets": [{"properties": {
+                "sheetId": 0, "title": "Sheet1", "sheetType": "GRID",
+                "gridProperties": {"rowCount": 1000, "columnCount": 26},
+            }}]}}),
+            Mock(ok=True, **{"json.return_value": {}}),
+        ]
+        self.assertEqual(sync.PlaylistSheet(session, "workbook").read(initialize=True), (True, {}))
+        sheet_check = session.get.call_args
+        self.assertTrue(sheet_check.args[0].endswith("/values/%27Sheet1%27"))
+        self.assertEqual(sheet_check.kwargs["params"], {"valueRenderOption": "FORMULA"})
+        session.post.assert_called_once()
+        batch = session.post.call_args.kwargs["json"]["requests"]
+        self.assertEqual(batch[0]["updateSpreadsheetProperties"]["properties"]["title"], "SwingStation Sync")
+        self.assertEqual(batch[1]["updateSheetProperties"]["properties"]["title"], "Spotify Playlists")
+        self.assertEqual(
+            [r["addSheet"]["properties"]["title"] for r in batch if "addSheet" in r],
+            ["Needs Action", "Pending", "On SwingStation"],
+        )
+        cells = [r["updateCells"]["rows"] for r in batch if "updateCells" in r]
+        for rows in cells:
+            self.assertEqual(
+                [cell["userEnteredValue"]["stringValue"] for cell in rows[0]["values"]], sync.HEADERS
+            )
+        self.assertEqual(
+            [rows[1]["values"][0]["userEnteredValue"]["formulaValue"] for rows in cells[1:]],
+            [
+                """=IFNA(FILTER('Spotify Playlists'!A:F,('Spotify Playlists'!E:E="⏸️")+('Spotify Playlists'!E:E="❌")),"No playlists need action")""",
+                """=IFNA(FILTER('Spotify Playlists'!A:F,('Spotify Playlists'!E:E="▶️")),"No pending playlists")""",
+                """=IFNA(FILTER('Spotify Playlists'!A:F,('Spotify Playlists'!E:E="✅")),"Nothing on SwingStation yet")""",
+            ],
+        )
+        validation = [r["setDataValidation"] for r in batch if "setDataValidation" in r]
+        self.assertEqual(len(validation), 1)
+        self.assertEqual(validation[0]["range"], {
+            "sheetId": 0, "startRowIndex": 1, "startColumnIndex": 4, "endColumnIndex": 5,
+        })
+
+    def test_bootstrap_preserves_nonempty_and_multi_tab_workbooks(self):
+        grid_tab = {"properties": {"sheetId": 0, "title": "Sheet1", "sheetType": "GRID"}}
+        for tabs, values in (([grid_tab, grid_tab], []), ([grid_tab], [["=IF(TRUE,\"\",1)"]])):
+            with self.subTest(tabs=tabs, values=values):
+                session = Mock()
+                session.get.side_effect = [
+                    Mock(status_code=400, ok=False),
+                    Mock(ok=True, **{"json.return_value": {"sheets": tabs}}),
+                    Mock(ok=True, **{"json.return_value": {"values": values}}),
+                ]
+                with self.assertRaisesRegex(RuntimeError, "requires .*empty"):
+                    sync.PlaylistSheet(session, "workbook").read(initialize=True)
+                session.post.assert_not_called()
+
     def test_title_formats_and_invalid_dates(self):
         for title in ("2026.06.16 Event", "2026-06-16 Event", "16.06.2026 Event"):
             with self.subTest(title=title):
