@@ -32,4 +32,4 @@ The offline tests need no Google or Spotify credentials. With the test configura
 
 The [Apps Script audit](docs/apps-script-audit.md) and [migration plan](docs/migration-plan.md) document the retired implementation and the move to Python.
 
-[MIT license](LICENSE)
+[MIT license](../../LICENSE)
