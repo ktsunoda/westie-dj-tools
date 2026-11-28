@@ -16,11 +16,11 @@ WORKBOOK_NAME = "SwingStation Sync"
 TAB_NAME = "Spotify Playlists"
 TAB = f"'{TAB_NAME}'"
 HEADERS = ["Spotify Playlist ID", "Name", "Spotify URL", "Visibility", "Status", "Reason"]
-PAUSED, APPROVED, DONE, ERROR, IGNORED = "⏸️", "▶️", "✅", "❌", "🚫"
+PAUSED, APPROVED, DONE, WARNING, ERROR, IGNORED = "⏸️", "▶️", "✅", "⚠️", "❌", "🚫"
 COLUMN_WIDTHS = (205, 285, 105, 80, 72, 420)
 VIEWS = (
-    ("Needs Action", (PAUSED, ERROR), "No playlists need action"),
-    ("Pending", (APPROVED,), "No pending playlists"),
+    ("Needs Action", (PAUSED, WARNING, ERROR), "No playlists need action"),
+    ("Pending", (APPROVED, WARNING), "No pending playlists"),
     ("On SwingStation", (DONE,), "Nothing on SwingStation yet"),
 )
 EVENT_MISSING = "Event not found: "
@@ -130,7 +130,9 @@ def workbook_setup_requests(sheet_id):
                 "filterCriteria": {"condition": {
                     "type": "CUSTOM_FORMULA",
                     "values": [{"userEnteredValue": (
-                        f'=OR(INDEX($E:$E,ROW())="{PAUSED}",INDEX($E:$E,ROW())="{ERROR}")'
+                        '=OR(' + ','.join(
+                            f'INDEX($E:$E,ROW())="{status}"' for status in VIEWS[0][1]
+                        ) + ')'
                     )}],
                 }},
             }],
@@ -188,7 +190,7 @@ def workbook_setup_requests(sheet_id):
                 "rule": {
                     "condition": {"type": "ONE_OF_LIST", "values": [
                         {"userEnteredValue": status}
-                        for status in (PAUSED, APPROVED, DONE, ERROR, IGNORED)
+                        for status in (PAUSED, APPROVED, DONE, WARNING, ERROR, IGNORED)
                     ]},
                     "strict": True,
                     "showCustomUi": True,
@@ -394,7 +396,7 @@ def publish(session, api_key, event, played, playlist_url, start_time=None):
         logging.info("SwingStation reported already_uploaded for %s", playlist_url)
         return DONE, ""
     if code == "event_not_found":
-        return ERROR, EVENT_MISSING + event["name"]
+        return WARNING, EVENT_MISSING + event["name"]
     if code == "missing_field" and "start_time is required" in error.get("message", ""):
         return ERROR, "SwingStation requires a start time for convention socials"
     if code and re.fullmatch(r"[a-z0-9_]+", code):
@@ -405,8 +407,8 @@ def publish(session, api_key, event, played, playlist_url, start_time=None):
 def process_queue(sheet, session, api_key, playlists, get_events):
     _, rows = sheet.read()
     for playlist_id, (number, row) in rows.items():
-        status, reason = row[4:6]
-        if status != APPROVED and not (status == ERROR and reason.startswith(EVENT_MISSING)):
+        status = row[4]
+        if status not in {APPROVED, WARNING}:
             continue
         metadata = playlists.get(playlist_id)
         if metadata is None:
@@ -421,7 +423,7 @@ def process_queue(sheet, session, api_key, playlists, get_events):
             else:
                 matches = get_events().get(normalize_name(event_name), [])
                 if not matches:
-                    outcome = ERROR, EVENT_MISSING + event_name
+                    outcome = WARNING, EVENT_MISSING + event_name
                 elif len(matches) > 1:
                     outcome = ERROR, f"Multiple SwingStation events match: {event_name}"
                 else:
@@ -431,7 +433,9 @@ def process_queue(sheet, session, api_key, playlists, get_events):
                         return
         title = metadata[0] if metadata is not None else row[1]
         new_status, new_reason = outcome
-        if new_status == ERROR:
+        if new_status == WARNING:
+            logging.info("Playlist %r (Spotify ID %s) will retry: %s", title, playlist_id, new_reason)
+        elif new_status == ERROR:
             logging.info("Playlist %r (Spotify ID %s) needs action: %s", title, playlist_id, new_reason)
         if list(outcome) != row[4:6]:
             sheet.write([{"range": f"{TAB}!E{number}:F{number}", "values": [list(outcome)]}])
