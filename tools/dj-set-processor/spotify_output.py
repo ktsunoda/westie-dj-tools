@@ -4,7 +4,7 @@ import logging
 import os
 from functools import partial
 
-from spotify_search import find_track
+from shared.spotify_search import find_track
 
 LOGGER = logging.getLogger(__name__)
 API = "https://api.spotify.com/v1"
