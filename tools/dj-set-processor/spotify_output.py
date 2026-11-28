@@ -5,10 +5,9 @@ import os
 from functools import partial
 
 from shared.spotify import find_track
+from shared.spotify.client import is_invalid_grant, refresh_access_token, request_spotify
 
 LOGGER = logging.getLogger(__name__)
-API = "https://api.spotify.com/v1"
-TOKEN_URL = "https://accounts.spotify.com/api/token"
 SETTINGS = ("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_REFRESH_TOKEN")
 
 
@@ -27,20 +26,13 @@ class SpotifyPlaylist:
         if not all(settings):
             raise ValueError("Spotify credentials are incomplete")
         client_id, client_secret, configured_refresh_token = settings
-        response = self.session.post(
-            TOKEN_URL, auth=(client_id, client_secret),
-            data={"grant_type": "refresh_token",
-                  "refresh_token": self.refresh_token or configured_refresh_token},
-            timeout=30,
+        response = refresh_access_token(
+            self.session.post, client_id, client_secret,
+            self.refresh_token or configured_refresh_token,
         )
         if response.status_code != 200:
-            if response.status_code == 400:
-                try:
-                    error = response.json()
-                except ValueError:
-                    error = None
-                if isinstance(error, dict) and error.get("error") == "invalid_grant":
-                    raise SpotifyReauthorizationRequired
+            if is_invalid_grant(response):
+                raise SpotifyReauthorizationRequired
             LOGGER.error("Spotify token refresh failed (HTTP %s)", response.status_code)
             response.raise_for_status()
         tokens = response.json()
@@ -48,9 +40,8 @@ class SpotifyPlaylist:
         return tokens["access_token"]
 
     def api(self, method, path, access_token, **kwargs):
-        response = self.session.request(
-            method, API + path, headers={"Authorization": f"Bearer {access_token}"},
-            timeout=30, **kwargs,
+        response = request_spotify(
+            self.session.request, method, path, access_token=access_token, **kwargs,
         )
         if not response.ok:
             LOGGER.error("Spotify %s failed (HTTP %s)", method, response.status_code)

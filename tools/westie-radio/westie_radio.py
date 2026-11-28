@@ -7,14 +7,15 @@ import os
 import re
 from collections import Counter
 from datetime import datetime
+from functools import partial
 
 from shared.spotify import TrackOverrides, find_track
+from shared.spotify.client import is_invalid_grant, refresh_access_token, request_spotify
 from virtualdj import parse_m3u
 
 LOG = logging.getLogger(__name__)
 HISTORY_NAME = re.compile(r"\d{4}-\d{2}-\d{2}\.m3u", re.IGNORECASE)
 DRIVE = "https://www.googleapis.com/drive/v3/files"
-SPOTIFY = "https://api.spotify.com/v1"
 LIMIT = 200
 
 
@@ -28,22 +29,17 @@ class HttpError(SyncError):
         self.status = status
 
 
-def request(session, service, method, url, **kwargs):
+def request(session, service, method, url, *, timeout=30, **kwargs):
     # Keep request URLs, response bodies and credentials out of errors and logs.
     try:
-        response = session.request(method, url, timeout=30, **kwargs)
+        response = session.request(method, url, timeout=timeout, **kwargs)
     except Exception:
         raise SyncError(f"{service} {method} request failed") from None
-    if service == "Spotify token" and response.status_code == 400:
-        try:
-            payload = response.json()
-        except ValueError:
-            payload = None
-        if isinstance(payload, dict) and payload.get("error") == "invalid_grant":
-            raise SyncError(
-                "Spotify authorization expired or was revoked. "
-                "Reconnect Westie Radio and update SPOTIFY_REFRESH_TOKEN in Render."
-            )
+    if service == "Spotify token" and is_invalid_grant(response):
+        raise SyncError(
+            "Spotify authorization expired or was revoked. "
+            "Reconnect Westie Radio and update SPOTIFY_REFRESH_TOKEN in Render."
+        )
     if not 200 <= response.status_code < 300:
         raise HttpError(service, method, response.status_code)
     return response
@@ -108,7 +104,8 @@ class Spotify:
         self.path = f"/playlists/{playlist}"
 
     def api(self, method, path, **kwargs):
-        return request(self.session, "Spotify", method, SPOTIFY + path, **kwargs).json()
+        send = partial(request, self.session, "Spotify")
+        return request_spotify(send, method, path, **kwargs).json()
 
     def search(self, artist, title, remix):
         return find_track(self.api, artist, title, remix)
@@ -305,10 +302,10 @@ def main():
             if args.mode == "seed":
                 seed(drive, playlist)
                 return 0
-            token = request(
-                session, "Spotify token", "POST", "https://accounts.spotify.com/api/token",
-                auth=(os.environ["SPOTIFY_CLIENT_ID"], os.environ["SPOTIFY_CLIENT_SECRET"]),
-                data={"grant_type": "refresh_token", "refresh_token": os.environ["SPOTIFY_REFRESH_TOKEN"]},
+            post = partial(request, session, "Spotify token", "POST")
+            token = refresh_access_token(
+                post, os.environ["SPOTIFY_CLIENT_ID"],
+                os.environ["SPOTIFY_CLIENT_SECRET"], os.environ["SPOTIFY_REFRESH_TOKEN"],
             ).json()["access_token"]
             session.headers["Authorization"] = f"Bearer {token}"
             overrides = TrackOverrides.from_env(writer)

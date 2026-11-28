@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from shared.spotify import TrackOverrides, find_track
+from shared.spotify.client import refresh_access_token, request_spotify
 
 DIVISIONS = {
     "Newcomer": ("newcomer",),
@@ -143,11 +144,9 @@ class Spotify:
         self.access_token = None
 
     def authorize(self):
-        response = self.session.post(
-            "https://accounts.spotify.com/api/token",
-            auth=(os.environ["SPOTIFY_CLIENT_ID"], os.environ["SPOTIFY_CLIENT_SECRET"]),
-            data={"grant_type": "refresh_token", "refresh_token": os.environ["SPOTIFY_REFRESH_TOKEN"]},
-            timeout=30,
+        response = refresh_access_token(
+            self.session.post, os.environ["SPOTIFY_CLIENT_ID"],
+            os.environ["SPOTIFY_CLIENT_SECRET"], os.environ["SPOTIFY_REFRESH_TOKEN"],
         )
         self.access_token = checked_json(response, "Spotify token refresh")["access_token"]
 
@@ -155,9 +154,8 @@ class Spotify:
         if self.access_token is None:
             self.authorize()
         return checked_json(
-            self.session.request(
-                method, f"https://api.spotify.com/v1/{path}",
-                headers={"Authorization": f"Bearer {self.access_token}"}, timeout=30, **kwargs,
+            request_spotify(
+                self.session.request, method, path, access_token=self.access_token, **kwargs,
             ),
             operation,
         )
