@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from shared.spotify_search import TrackOverrides, find_track
+from shared.spotify import TrackOverrides, find_track
 
 DIVISIONS = {
     "Newcomer": ("newcomer",),
