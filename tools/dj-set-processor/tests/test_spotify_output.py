@@ -1,12 +1,28 @@
+import os
 import unittest
-from unittest.mock import Mock, call
+from unittest.mock import Mock, call, patch
 
-from spotify_output import SpotifyPlaylist
+from spotify_output import SETTINGS, SpotifyPlaylist
 from virtualdj import parse_m3u
 from workflow import parse_filename
 
 
 class SpotifyOutputTests(unittest.TestCase):
+    def test_reuses_rotated_refresh_token_within_the_job(self):
+        session = Mock()
+        response = session.post.return_value
+        response.status_code = 200
+        response.json.side_effect = [
+            {"access_token": "first", "refresh_token": "rotated"},
+            {"access_token": "second"},
+        ]
+        output = SpotifyPlaylist(session)
+        with patch.dict(os.environ, dict(zip(SETTINGS, ("client", "secret", "original")))):
+            self.assertEqual(output.access_token(), "first")
+            self.assertEqual(output.access_token(), "second")
+        sent = [request.kwargs["data"]["refresh_token"] for request in session.post.call_args_list]
+        self.assertEqual(sent, ["original", "rotated"])
+
     def test_names_playlist_from_first_m3u_track_even_if_it_is_unmatched(self):
         playlist = parse_filename("id", "2026.09.01 01 Reverie Ballroom [SP].m3u")
         for time_field, suffix in (("<time>21:08</time>", " (21:08)"), ("", "")):

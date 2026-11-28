@@ -11,7 +11,8 @@ import webbrowser
 
 import requests
 
-from spotify_output import SETTINGS, TOKEN_URL
+from shared.spotify.client import TOKEN_URL
+from spotify_output import SETTINGS
 
 REDIRECT_URI = "http://127.0.0.1:8765/callback"
 
