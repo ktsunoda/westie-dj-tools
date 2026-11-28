@@ -190,7 +190,7 @@ def workbook_setup_requests(sheet_id):
                 "rule": {
                     "condition": {"type": "ONE_OF_LIST", "values": [
                         {"userEnteredValue": status}
-                        for status in (PAUSED, APPROVED, DONE, WARNING, ERROR, IGNORED)
+                        for status in (PAUSED, APPROVED, WARNING, ERROR, IGNORED, DONE)
                     ]},
                     "strict": True,
                     "showCustomUi": True,
