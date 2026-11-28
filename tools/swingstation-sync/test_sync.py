@@ -211,6 +211,27 @@ class SyncTests(unittest.TestCase):
         session.post.assert_not_called()
         sheet.write.assert_not_called()
 
+    def test_upload_timeout_warns_and_continues_to_the_next_playlist(self):
+        sheet, session = Mock(), Mock()
+        rows = {
+            "first": (2, ["first", "2026.05.15 Event", "url1", "Public", sync.APPROVED, ""]),
+            "second": (3, ["second", "2026.05.14 Event", "url2", "Public", sync.APPROVED, ""]),
+        }
+        sheet.read.return_value = True, rows
+        session.post.side_effect = [sync.requests.exceptions.ReadTimeout(), Mock(status_code=201)]
+        event = {"id": "event-id", "type": "local event", "name": "Event"}
+        playlists = {playlist_id: row[1:4] for playlist_id, (_, row) in rows.items()}
+
+        sync.process_queue(sheet, session, "key", playlists, lambda: {"event": [event]})
+
+        self.assertEqual(session.post.call_count, 2)
+        first, second = [call.args[0][0] for call in sheet.write.call_args_list]
+        self.assertEqual(first["range"], "'Spotify Playlists'!E2:F2")
+        self.assertEqual(first["values"], [[
+            sync.WARNING, "Upload timed out. SwingStation may have received it. Will retry automatically.",
+        ]])
+        self.assertEqual(second, {"range": "'Spotify Playlists'!E3:F3", "values": [[sync.DONE, ""]]})
+
     def test_timed_convention_title_publishes_with_normalized_start_time(self):
         sheet, session = Mock(), Mock()
         row = ["id", "2026.03.21 King Swing 2026 (6:00)", "url", "Public", sync.APPROVED, ""]
