@@ -15,7 +15,7 @@ Use a UTF-8 VirtualDJ `.m3u` export with `#EXTVDJ` metadata. Put it directly in 
 | Tag | Result |
 | --- | --- |
 | `DH` | Append plays to the tab for the filename's year, preserving order and repeats. |
-| `SP` | Create a Spotify playlist named `YYYY.MM.DD Event` from matched plays. |
+| `SP` | Create a Spotify playlist named `YYYY.MM.DD Event (HH:MM)` from matched plays. The time comes from the first track. If that track has no recorded local time, the name ends with the event. |
 | `DH; SP` or `SP; DH` | Run both in the listed order. |
 
 Files with no pending tags are skipped. The processor handles older dates first and sorts parts of the same event and date numerically. Tag all parts before a run if their relative order matters.
