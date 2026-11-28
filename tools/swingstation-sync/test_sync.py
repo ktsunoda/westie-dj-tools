@@ -33,7 +33,7 @@ class SyncTests(unittest.TestCase):
                 "columnIndex": 4,
                 "filterCriteria": {"condition": {
                     "type": "CUSTOM_FORMULA",
-                    "values": [{"userEnteredValue": '=OR(INDEX($E:$E,ROW())="⏸️",INDEX($E:$E,ROW())="❌")'}],
+                    "values": [{"userEnteredValue": '=OR(INDEX($E:$E,ROW())="⏸️",INDEX($E:$E,ROW())="⚠️",INDEX($E:$E,ROW())="❌")'}],
                 }},
             }],
         }])
@@ -49,8 +49,8 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(
             [rows[1]["values"][0]["userEnteredValue"]["formulaValue"] for rows in cells[1:]],
             [
-                """=IFNA(FILTER('Spotify Playlists'!A:F,('Spotify Playlists'!E:E="⏸️")+('Spotify Playlists'!E:E="❌")),"No playlists need action")""",
-                """=IFNA(FILTER('Spotify Playlists'!A:F,('Spotify Playlists'!E:E="▶️")),"No pending playlists")""",
+                """=IFNA(FILTER('Spotify Playlists'!A:F,('Spotify Playlists'!E:E="⏸️")+('Spotify Playlists'!E:E="⚠️")+('Spotify Playlists'!E:E="❌")),"No playlists need action")""",
+                """=IFNA(FILTER('Spotify Playlists'!A:F,('Spotify Playlists'!E:E="▶️")+('Spotify Playlists'!E:E="⚠️")),"No pending playlists")""",
                 """=IFNA(FILTER('Spotify Playlists'!A:F,('Spotify Playlists'!E:E="✅")),"Nothing on SwingStation yet")""",
             ],
         )
@@ -178,12 +178,12 @@ class SyncTests(unittest.TestCase):
         sheet.read.return_value = True, {"id": (2, row)}
         playlists = {"id": row[1:4]}
         sync.process_queue(sheet, session, "key", playlists, lambda: {})
-        missing = [sync.ERROR, sync.EVENT_MISSING + "Event"]
+        missing = [sync.WARNING, sync.EVENT_MISSING + "Event"]
         sheet.write.assert_called_once_with(
             [{"range": "'Spotify Playlists'!E2:F2", "values": [missing]}]
         )
         sheet.reset_mock()
-        row[4:6] = missing
+        row[4:6] = [sync.WARNING, "Edited explanation"]
         event = {"id": "event-id", "type": "local event", "name": "Event"}
         session.post.return_value.status_code = 409
         session.post.return_value.json.return_value = {"error": {"code": "already_uploaded"}}
@@ -197,6 +197,15 @@ class SyncTests(unittest.TestCase):
         sheet.write.assert_called_once_with(
             [{"range": "'Spotify Playlists'!E2:F2", "values": [[sync.DONE, ""]]}]
         )
+
+    def test_error_does_not_retry_even_with_old_missing_event_reason(self):
+        sheet, session, events = Mock(), Mock(), Mock()
+        row = ["id", "2026.11.01 Event", "url", "Public", sync.ERROR, "Event not found: Event"]
+        sheet.read.return_value = True, {"id": (2, row)}
+        sync.process_queue(sheet, session, "key", {"id": row[1:4]}, events)
+        events.assert_not_called()
+        session.post.assert_not_called()
+        sheet.write.assert_not_called()
 
     def test_timed_convention_title_publishes_with_normalized_start_time(self):
         sheet, session = Mock(), Mock()

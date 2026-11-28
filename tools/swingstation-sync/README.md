@@ -11,10 +11,10 @@ for each new row.
 To set up a new workbook, share a Google spreadsheet with exactly one empty tab
 with the service account as Editor. On the first run, the job renames the
 workbook and its first tab, sets up the headers, column widths and Status
-dropdown, and adds three live views. **Needs Action** shows ⏸️ and ❌,
-**Pending** shows ▶️, and **On SwingStation** shows ✅. Edit statuses in
+dropdown, and adds three live views. **Needs Action** shows ⏸️, ⚠️, and ❌,
+**Pending** shows ▶️ and ⚠️, and **On SwingStation** shows ✅. Edit statuses in
 **Spotify Playlists**, or open its saved **Needs Action** filter view from
-**Data → Change view** to edit only ⏸️ and ❌ rows. The main tab opens
+**Data → Change view** to edit ⏸️, ⚠️, and ❌ rows. The main tab opens
 unfiltered. Setup only runs on a workbook with one empty tab.
 
 | Status | Meaning |
@@ -22,7 +22,8 @@ unfiltered. Setup only runs on a workbook with one empty tab.
 | ⏸️ | Undecided. Default for new public playlists. |
 | ▶️ | Approved. The job looks for a date and an existing SwingStation event. |
 | ✅ | Published or already uploaded. |
-| ❌ | Needs action. Read the Reason column. Missing events are rechecked on each run. For other issues, fix the problem and switch the status back to ▶️. |
+| ⚠️ | Needs attention and will retry automatically. Used for approved playlists whose event is missing. |
+| ❌ | Needs a fix. Read the Reason column, fix the issue, and switch back to ▶️ to retry. |
 | 🚫 | Ignored. New private playlists get this status and the reason Private playlist. You can also set it manually. |
 
 Approved titles start with a date in `YYYY.MM.DD`, `YYYY-MM-DD`, or
