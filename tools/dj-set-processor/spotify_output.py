@@ -83,9 +83,13 @@ class SpotifyPlaylist:
         if not uris:
             LOGGER.error("Spotify found no matching tracks (%s unmatched)", unmatched)
             raise ValueError("Spotify found no matching tracks")
+        name = playlist.spotify_name
+        first_play_time = tracks[0].get("play_time", "").strip()
+        if first_play_time:
+            name = f"{name} ({first_play_time})"
         result = self.api(
             "POST", "/me/playlists", token,
-            json={"name": playlist.spotify_name, "public": False, "description": ""},
+            json={"name": name, "public": False, "description": ""},
         )
         path = f"/playlists/{result['id']}/items"
         for start in range(0, len(uris), 100):
