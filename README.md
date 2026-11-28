@@ -13,7 +13,7 @@ The DJ Set Processor can populate the history workbook that the Contest Playlist
 
 ## Spotify Search
 
-All three tools use the [`shared.spotify_search` package](shared/spotify_search/) when looking up tracks. Set `SPOTIFY_SEARCH_SPREADSHEET_ID` to the same standalone workbook ID for each tool and give each existing Google service account Editor access. Enable the Google Sheets API in each service account's project.
+All three tools use the [`shared.spotify` package](shared/spotify/) when looking up tracks. Set `SPOTIFY_SEARCH_SPREADSHEET_ID` to the same standalone workbook ID for each tool and give each existing Google service account Editor access. Enable the Google Sheets API in each service account's project.
 
 Name the workbook **Spotify Search** and its tab **Track Overrides**. Use these headers in A1:C1: `Artist`, `Title`, `Spotify Track URL`.
 

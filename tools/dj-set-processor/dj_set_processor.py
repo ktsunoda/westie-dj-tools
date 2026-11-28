@@ -10,7 +10,7 @@ from google.auth.transport.requests import AuthorizedSession
 from google.oauth2.service_account import Credentials
 
 from google_outputs import DriveFolder, HistorySheet
-from shared.spotify_search import TrackOverrides
+from shared.spotify import TrackOverrides
 from spotify_output import SETTINGS, SpotifyPlaylist
 from workflow import run_workflows
 

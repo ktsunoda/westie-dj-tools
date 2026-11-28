@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
-from shared.spotify_search import TrackOverrides
+from shared.spotify import TrackOverrides
 
 
 ARTIST = "Michael Jackson & Akon"

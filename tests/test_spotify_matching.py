@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from shared.spotify_search import find_track
+from shared.spotify import find_track
 
 
 class SpotifyMatchingTests(unittest.TestCase):
