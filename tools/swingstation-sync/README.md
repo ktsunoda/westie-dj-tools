@@ -22,7 +22,7 @@ unfiltered. Setup only runs on a workbook with one empty tab.
 | ⏸️ | Undecided. Default for new public playlists. |
 | ▶️ | Approved. The job looks for a date and an existing SwingStation event. |
 | ✅ | Published or already uploaded. |
-| ⚠️ | Needs attention and will retry automatically. Used for approved playlists whose event is missing. |
+| ⚠️ | Needs attention and will retry automatically. Used when an approved playlist's event is missing or its upload times out. |
 | ❌ | Needs a fix. Read the Reason column, fix the issue, and switch back to ▶️ to retry. |
 | 🚫 | Ignored. New private playlists get this status and the reason Private playlist. You can also set it manually. |
 

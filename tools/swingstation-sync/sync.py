@@ -378,7 +378,9 @@ def publish(session, api_key, event, played, playlist_url, start_time=None):
             json=payload,
             timeout=TIMEOUT,
         )
-    except (requests.Timeout, requests.ConnectionError) as exc:
+    except requests.Timeout:
+        return WARNING, "Upload timed out. SwingStation may have received it. Will retry automatically."
+    except requests.ConnectionError as exc:
         logging.warning("SwingStation upload deferred for %s (%s)", playlist_url, type(exc).__name__)
         return None
     if response.status_code == 201:
