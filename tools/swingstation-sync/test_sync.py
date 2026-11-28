@@ -56,6 +56,10 @@ class SyncTests(unittest.TestCase):
         )
         validation = [r["setDataValidation"] for r in batch if "setDataValidation" in r]
         self.assertEqual(len(validation), 1)
+        self.assertEqual(
+            [option["userEnteredValue"] for option in validation[0]["rule"]["condition"]["values"]],
+            ["⏸️", "▶️", "⚠️", "❌", "🚫", "✅"],
+        )
         self.assertEqual(validation[0]["range"], {
             "sheetId": 0, "startRowIndex": 1, "startColumnIndex": 4, "endColumnIndex": 5,
         })
